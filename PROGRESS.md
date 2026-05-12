@@ -6,6 +6,62 @@
 
 ---
 
+## Session 2026-05-11-2300 (agent: A)
+
+**Phase:** 0 — Day 0 complete. All Phase 0 success criteria met.
+
+**Status:** Phase 0 fully implemented.
+
+- `generate_mock_pairs()` implemented in `src/data/perturbation_pairs.py` — produces
+  Contract-2-compliant `.npz` files (train / val / ood / combo + metadata.json) with
+  per-gene constant Δz + N(0, 0.1) noise; 80/20 gene split for OOD, 90/10 cell split for val.
+- `PerturbationDynamicsModel.forward()` implemented in `src/models/dynamics.py`:
+  residual MLP (input_proj → n_layers `_ResidualBlock` → head_mu + head_log_var),
+  log_var clamped to [log_var_min, log_var_max], z_next = z + mu.
+  `heteroscedastic_nll` and `composition_loss` remain Phase 1 stubs (Agent B).
+- Hydra config: added `# @package paths` to `config/paths.yaml` so `cfg.paths.*` is
+  correctly nested. Fixed `conftest.py` to override `paths.root` in compose call, resolving
+  `${hydra:runtime.cwd}` when called outside `@hydra.main`.
+- `src/pipeline.py`: implemented `run --dry-run` path (Typer callback + named subcommand).
+- `tests/conftest.py`: fixed `mock_gene_vocab["noop_idx"]` from 5 → 4 (= n_genes per Contract 1).
+- xfail markers removed from all three dynamics forward-pass tests (they now pass).
+- `python -m src.utils.device` → `device=mps | torch=2.4.1` ✓
+- `python -m src.pipeline run --config-name default --dry-run` → exit 0 ✓
+- `pytest -k "not slow"` → 23 passed, 7 xfailed, 0 failed ✓
+
+**Metrics:**
+
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| VAE — ELBO converged | early stop or epochs > 200 with negative-ELBO trend | — | not started |
+| VAE — Silhouette (perturbation) | ≥ 0.05 | — | not started |
+| VAE — ε_success | 0.1 < value < 10 (sanity) | — | not started |
+| Dynamics — primary gate | passed | — | not started |
+| Dynamics — uncertainty calibration | Spearman ≥ 0.20 | — | not started |
+| Dynamics — OOD R² | reported (non-gating) | — | not started |
+| RL — gymnasium env_checker | pass | — | not started |
+| RL — final success rate | ≥ 30% on in-distribution starts | — | not started |
+| RL — mean steps per success | ≤ 5 (stretch) | — | not started |
+| DepMap — at least one FDR q < 0.05 | yes | — | not started |
+
+**Blockers:**
+
+- P1 — `import pertpy` fails (`jaxlib.xla_extension` missing). scvi-tools → Pyro → JAX chain.
+  scperturb Zenodo curl fallback works. Fix: add `jax[cpu]` to `pyproject.toml`. Does NOT
+  block Phase 0 (data not needed until Phase 1).
+- P1 — Norman h5ad download incomplete (46 MB / 666 MB). Rerun:
+  `curl -L -o data/raw/norman_2019.h5ad "https://zenodo.org/records/10044268/files/NormanWeissman2019_filtered.h5ad?download=1"` before Phase 1 preprocessing.
+
+**Next:**
+
+1. **[Agent A]** Add `jax[cpu]` to `pyproject.toml`, complete Norman download, implement
+   `src/data/preprocess.py::run_preprocessing()` end-to-end.
+2. **[Agent A]** Implement `src/models/vae.py::train_vae()` + all Contract-1 artifact
+   writers; implement `src/utils/checkpointing.py` scVI parts and `src/utils/logging.py`.
+3. **[Both]** Complete `scripts/train_vae.py` and verify VAE trains on real Norman data.
+
+---
+
 ## Session 2026-05-11-2125 (agent: lead-architect)
 
 **Phase:** 0 — Scaffold complete; both agents unblocked to start Phase 1.

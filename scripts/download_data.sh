@@ -66,27 +66,61 @@ PY
 # 2. DepMap Chronos
 # ---------------------------------------------------------------------------
 if [ ! -f "$DEPMAP_CSV" ]; then
-    echo "[2/2] DepMap Chronos CSV not found — downloading version $DEPMAP_VERSION…"
-    DEPMAP_URL="https://depmap.org/portal/api/download/files/CRISPRGeneEffect.csv?release=${DEPMAP_VERSION}"
-    if ! curl -L -o "$DEPMAP_CSV" "$DEPMAP_URL"; then
-        echo "  ✗ DepMap download failed; please visit https://depmap.org/portal/download/ and place the CSV at $DEPMAP_CSV"
+    echo "[2/2] DepMap Chronos CSV not found — resolving download URL via manifest..."
+    # DepMap now uses a two-step API: first fetch a manifest CSV that lists all files
+    # with their signed GCS URLs, then download from the real URL in that manifest.
+    ACTUAL_URL=$(python - <<PY
+import urllib.request, csv, io, sys
+manifest_url = "https://depmap.org/portal/api/download/files?file_name=CRISPRGeneEffect.csv"
+try:
+    with urllib.request.urlopen(manifest_url, timeout=30) as r:
+        content = r.read().decode("utf-8")
+except Exception as e:
+    print(f"ERROR: {e}", file=sys.stderr)
+    sys.exit(1)
+reader = csv.DictReader(io.StringIO(content))
+matches = [row for row in reader if row["filename"] == "CRISPRGeneEffect.csv"]
+if not matches:
+    print("ERROR: CRISPRGeneEffect.csv not found in manifest", file=sys.stderr)
+    sys.exit(1)
+# Pick the first match (latest release — manifest is sorted newest-first)
+print(matches[0]["url"])
+PY)
+    if [ $? -ne 0 ] || [ -z "$ACTUAL_URL" ]; then
+        echo "  ✗ Failed to resolve DepMap download URL. Check your internet connection."
+        exit 3
+    fi
+    DEPMAP_RELEASE=$(python - <<PY
+import urllib.request, csv, io
+with urllib.request.urlopen("https://depmap.org/portal/api/download/files?file_name=CRISPRGeneEffect.csv", timeout=30) as r:
+    content = r.read().decode("utf-8")
+matches = [row for row in csv.DictReader(io.StringIO(content)) if row["filename"] == "CRISPRGeneEffect.csv"]
+print(matches[0]["release"] if matches else "unknown")
+PY)
+    echo "  Downloading from release: ${DEPMAP_RELEASE}..."
+    if ! curl -L -o "$DEPMAP_CSV" "$ACTUAL_URL"; then
+        echo "  ✗ DepMap download failed."
         exit 3
     fi
     echo "  ✓ DepMap fetch succeeded → $DEPMAP_CSV"
 else
-    echo "[2/2] $DEPMAP_CSV already exists; skipping."
-fi
-
-# Extract K562 row into a parquet
-python - <<PY
-import polars as pl
-df = pl.read_csv("$DEPMAP_CSV")
-# DepMap rows are cell lines; first column is "ModelID" or "DepMap_ID".
-# K562's DepMap ID is ACH-000551 (verify per release notes).
-id_col = "ModelID" if "ModelID" in df.columns else "DepMap_ID"
+    echo "[2/2] $DEPMAP_CSV already exists — extracting K562 row..."
+    python - <<PY
+import polars as pl, sys
+df = pl.read_csv("$DEPMAP_CSV", truncate_ragged_lines=True)
+# DepMap column name for cell-line IDs varies by release:
+#   older releases: "ModelID" or "DepMap_ID"
+#   newer releases (26Q1+): first column has no name -> polars reads it as ""
+id_col = next(
+    (c for c in ["ModelID", "DepMap_ID", ""] if c in df.columns),
+    None,
+)
+if id_col is None:
+    print(f"  ✗ Cannot find cell-line ID column. Columns: {df.columns[:5]}", file=sys.stderr)
+    sys.exit(1)
 k562 = df.filter(pl.col(id_col) == "ACH-000551")
 if k562.height == 0:
-    raise SystemExit(f"K562 row (ACH-000551) not found in {id_col!r}")
+    raise SystemExit(f"K562 row (ACH-000551) not found in column {id_col!r}")
 genes = [c for c in df.columns if c != id_col]
 long = pl.DataFrame({
     "gene_symbol": [c.split(" ")[0] for c in genes],
@@ -95,6 +129,7 @@ long = pl.DataFrame({
 long.write_parquet("$DATA_PROCESSED/depmap_k562_chronos.parquet")
 print(f"  DepMap K562: {long.height} genes; {long['is_essential'].sum()} essential.")
 PY
+fi
 
 echo ""
 echo "=== Data download complete ==="

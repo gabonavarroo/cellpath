@@ -19,8 +19,11 @@ schema so Agent B can train dynamics on Day 0 without waiting for the real data.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Literal
+
+import numpy as np
 
 
 def build_pairs(
@@ -164,19 +167,19 @@ def generate_mock_pairs(
     seed: int = 42,
     out_dir: str | Path | None = None,
 ) -> dict[str, Path]:
-    """Synthetic pairs matching the Contract 2 schema. **Day 0 deliverable for Agent A.**
+    """Synthetic pairs matching the Contract 2 schema.
 
     Used by Agent B to start dynamics training before real Norman data is processed.
-    Each perturbation gets a learned-on-rng constant ``Δz`` signature, so the dynamics model has
-    a non-trivial learning target; the data does NOT come from biology. Metrics computed on
+    Each perturbation gets a fixed Δz signature (sampled once from rng), so the dynamics model
+    has a non-trivial learning target. The data does NOT come from biology. Metrics computed on
     mock runs are meaningless — log them as ``mock_*`` if logged at all.
 
     Parameters
     ----------
     n
-        Total number of train pairs.
+        Total number of train+val pairs (across all train-gene perturbations).
     n_genes
-        Action space size (excluding NO-OP).
+        Action space size (excluding NO-OP). Genes are 1-indexed: [1, n_genes].
     n_latent
         Latent dimension.
     n_combo
@@ -184,21 +187,123 @@ def generate_mock_pairs(
     seed
         RNG seed.
     out_dir
-        Destination dir. If ``None``, writes to ``artifacts/pairs/`` (mock files).
+        Destination dir. If ``None``, writes to ``artifacts/pairs/``.
 
     Returns
     -------
     dict[str, Path]
         ``{"train", "val", "ood", "combo", "metadata"}``.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement on Day 0 so Agent B is unblocked. Generate per-gene Δz from a fixed
-        rng + small per-cell noise.
     """
-    raise NotImplementedError(
-        "Agent A (Day 0 deliverable): implement synthetic pairs. "
-        "Per-gene constant Δz + per-cell N(0, 0.1) noise. "
-        "Write the same npz schema as the real pipeline."
+    rng = np.random.default_rng(seed)
+
+    if out_dir is None:
+        out_dir = Path("artifacts/pairs")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Per-gene constant displacement vectors — index 0 unused (ctrl placeholder)
+    gene_deltas = rng.normal(scale=0.5, size=(n_genes + 1, n_latent)).astype("float32")
+
+    # Gene split: 80% train, 20% OOD (by gene identity)
+    all_gene_ids = np.arange(1, n_genes + 1, dtype=np.int32)
+    shuffled = rng.permutation(all_gene_ids)
+    n_ood_genes = max(1, int(n_genes * 0.2))
+    ood_gene_set = set(shuffled[:n_ood_genes].tolist())
+    train_gene_set = set(shuffled[n_ood_genes:].tolist())
+
+    # Generate n pairs, assigning genes uniformly over all genes
+    z_ctrl_all = rng.standard_normal((n, n_latent)).astype("float32")
+    gene_idx_all = rng.choice(all_gene_ids, size=n).astype("int32")
+    noise = rng.normal(scale=0.1, size=(n, n_latent)).astype("float32")
+    z_pert_all = (z_ctrl_all + gene_deltas[gene_idx_all] + noise).astype("float32")
+
+    # Partition by gene type
+    is_ood = np.array([int(g) in ood_gene_set for g in gene_idx_all.tolist()], dtype=bool)
+    is_train_gene = ~is_ood
+
+    z_ctrl_tg = z_ctrl_all[is_train_gene]
+    gene_idx_tg = gene_idx_all[is_train_gene]
+    z_pert_tg = z_pert_all[is_train_gene]
+
+    # Within-train-gene: 90% → train, 10% → val (cell-level split)
+    n_tg = len(z_ctrl_tg)
+    perm = rng.permutation(n_tg)
+    n_val = max(1, int(n_tg * 0.1))
+    val_idx = perm[:n_val]
+    train_idx = perm[n_val:]
+
+    # Combo pairs: two sequential gene activations from train genes
+    train_gene_arr = np.array(sorted(train_gene_set), dtype=np.int32)
+    combo_a = rng.choice(train_gene_arr, size=n_combo).astype("int32")
+    combo_b = rng.choice(train_gene_arr, size=n_combo).astype("int32")
+    z_ctrl_combo = rng.standard_normal((n_combo, n_latent)).astype("float32")
+    noise_combo = rng.normal(scale=0.1, size=(n_combo, n_latent)).astype("float32")
+    z_pert_ab = (
+        z_ctrl_combo + gene_deltas[combo_a] + gene_deltas[combo_b] + noise_combo
+    ).astype("float32")
+
+    # Write all four npz files
+    paths: dict[str, Path] = {}
+
+    train_path = out_dir / "train_pairs.npz"
+    np.savez(
+        train_path,
+        z_ctrl=z_ctrl_tg[train_idx],
+        gene_idx=gene_idx_tg[train_idx],
+        z_pert=z_pert_tg[train_idx],
     )
+    paths["train"] = train_path
+
+    val_path = out_dir / "val_pairs.npz"
+    np.savez(
+        val_path,
+        z_ctrl=z_ctrl_tg[val_idx],
+        gene_idx=gene_idx_tg[val_idx],
+        z_pert=z_pert_tg[val_idx],
+    )
+    paths["val"] = val_path
+
+    ood_path = out_dir / "ood_pairs.npz"
+    np.savez(
+        ood_path,
+        z_ctrl=z_ctrl_all[is_ood],
+        gene_idx=gene_idx_all[is_ood],
+        z_pert=z_pert_all[is_ood],
+    )
+    paths["ood"] = ood_path
+
+    combo_path = out_dir / "combo_pairs.npz"
+    np.savez(
+        combo_path,
+        z_ctrl=z_ctrl_combo,
+        gene_idx_a=combo_a,
+        gene_idx_b=combo_b,
+        z_pert_ab=z_pert_ab,
+    )
+    paths["combo"] = combo_path
+
+    # Metadata matching Contract 2
+    n_per_pert: dict[str, int] = {}
+    train_gene_idx_written = gene_idx_tg[train_idx]
+    for g in sorted(train_gene_set):
+        n_per_pert[str(g)] = int((train_gene_idx_written == g).sum())
+
+    metadata = {
+        "pairing_method": "mock",
+        "n_train": int(len(train_idx)),
+        "n_val": int(n_val),
+        "n_ood": int(is_ood.sum()),
+        "n_combo": n_combo,
+        "held_out_genes": sorted(ood_gene_set),
+        "ot_epsilon": None,
+        "n_per_perturbation": n_per_pert,
+        "mock": True,
+        "n_latent": n_latent,
+        "n_genes": n_genes,
+        "seed": seed,
+    }
+    meta_path = out_dir / "metadata.json"
+    meta_path.write_text(json.dumps(metadata, indent=2))
+    paths["metadata"] = meta_path
+
+    return paths

@@ -7,8 +7,8 @@ Architecture
 ::
 
     z (B, 32)   ─┐
-                 ├─►  cat  ──► residual MLP  ──► (mu, log_var)
-    gene_idx (B,)┘                                  each (B, 32)
+                 ├─►  cat  ──► input_proj ──► residual blocks ──► (mu, log_var)
+    gene_idx (B,)┘                                                  each (B, 32)
 
     z_next = z + mu                                  (residual head)
     loss   = heteroscedastic Gaussian NLL on Δz       (training)
@@ -27,6 +27,27 @@ import torch
 from torch import nn
 
 
+class _ResidualBlock(nn.Module):
+    """Single residual block: LayerNorm → Linear → SiLU → Dropout → Linear + skip."""
+
+    def __init__(self, n_hidden: int, dropout: float = 0.1, use_layernorm: bool = True) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(n_hidden) if use_layernorm else nn.Identity()
+        self.linear1 = nn.Linear(n_hidden, n_hidden)
+        self.act = nn.SiLU()
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(n_hidden, n_hidden)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = x
+        x = self.norm(x)
+        x = self.linear1(x)
+        x = self.act(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        return x + residual
+
+
 class PerturbationDynamicsModel(nn.Module):
     """f_θ(z, gene_idx) → (z_next, μ, log σ²) with residual head + heteroscedastic outputs.
 
@@ -36,8 +57,8 @@ class PerturbationDynamicsModel(nn.Module):
         Latent dim (matches ``cfg.vae.n_latent``, default 32).
     n_genes
         Number of perturbable genes (matches ``gene_vocab["n_genes"]``). The embedding table is
-        sized ``n_genes + 1`` so the final index can encode NO-OP at inference time, though
-        NO-OP is not used during dynamics training.
+        sized ``n_genes + 1`` so index 0 is a reserved placeholder (ctrl) and indices 1..n_genes
+        are the actual gene embeddings, matching the 1-indexed ``gene_idx`` in Contract 2 pairs.
     d_emb
         Gene-embedding dimension (default 64).
     n_hidden
@@ -53,7 +74,7 @@ class PerturbationDynamicsModel(nn.Module):
     --------
     >>> model = PerturbationDynamicsModel(n_latent=32, n_genes=100)
     >>> z = torch.randn(8, 32)
-    >>> g = torch.randint(0, 100, (8,))
+    >>> g = torch.randint(1, 101, (8,))  # 1-indexed gene indices
     >>> z_next, mu, log_var = model(z, g)
     >>> z_next.shape, mu.shape, log_var.shape
     (torch.Size([8, 32]), torch.Size([8, 32]), torch.Size([8, 32]))
@@ -79,11 +100,34 @@ class PerturbationDynamicsModel(nn.Module):
         self.d_emb = d_emb
         self.log_var_min = log_var_min
         self.log_var_max = log_var_max
-        # Subclasses / future agent B implementation should populate:
-        #   self.gene_embedding : nn.Embedding(n_genes + 1, d_emb)
-        #   self.trunk          : residual MLP (n_latent + d_emb -> n_hidden, n_layers blocks)
-        #   self.head_mu        : Linear(n_hidden, n_latent)
-        #   self.head_log_var   : Linear(n_hidden, n_latent), bias init = log_var_init_bias
+
+        _act_map = {"silu": nn.SiLU, "relu": nn.ReLU, "gelu": nn.GELU}
+        if activation not in _act_map:
+            raise ValueError(f"Unknown activation {activation!r}. Choose from {list(_act_map)}.")
+        act_cls = _act_map[activation]
+
+        # Gene embedding: index 0 = ctrl placeholder (unused in training);
+        # indices 1..n_genes correspond to the 1-indexed gene_idx in Contract 2 pairs.
+        self.gene_embedding = nn.Embedding(n_genes + 1, d_emb)
+
+        # Input projection: (n_latent + d_emb) → n_hidden
+        self.input_proj = nn.Sequential(
+            nn.Linear(n_latent + d_emb, n_hidden),
+            act_cls(),
+        )
+
+        # Residual trunk: n_layers blocks at n_hidden
+        self.trunk = nn.Sequential(*[
+            _ResidualBlock(n_hidden, dropout=dropout, use_layernorm=use_layernorm)
+            for _ in range(n_layers)
+        ])
+
+        # Output heads
+        self.head_mu = nn.Linear(n_hidden, n_latent)
+        self.head_log_var = nn.Linear(n_hidden, n_latent)
+
+        # Initialise log_var bias to avoid early overconfidence
+        nn.init.constant_(self.head_log_var.bias, log_var_init_bias)
 
     def forward(
         self,
@@ -97,7 +141,8 @@ class PerturbationDynamicsModel(nn.Module):
         z
             Shape ``(B, n_latent)``.
         gene_idx
-            Shape ``(B,)`` int. In ``[0, n_genes]``; ``n_genes`` is NO-OP.
+            Shape ``(B,)`` int. Range ``[1, n_genes]`` during training (1-indexed); the
+            environment converts 0-indexed RL actions to 1-indexed gene_idx before calling.
 
         Returns
         -------
@@ -108,17 +153,17 @@ class PerturbationDynamicsModel(nn.Module):
         log_var : torch.Tensor
             Predicted per-dim log σ² (clamped to ``[log_var_min, log_var_max]``),
             shape ``(B, n_latent)``.
-
-        Raises
-        ------
-        NotImplementedError
-            Agent B: implement the trunk + heads per ARCHITECTURE.md Concept 3.
         """
-        raise NotImplementedError(
-            "Agent B: implement forward pass. Trunk = residual MLP with SiLU + LayerNorm. "
-            "Heads = Linear(n_hidden -> n_latent) for mu and Linear(n_hidden -> n_latent) for log_var. "
-            "Clamp log_var to [log_var_min, log_var_max]. Return (z + mu, mu, log_var)."
-        )
+        emb = self.gene_embedding(gene_idx)            # (B, d_emb)
+        h = torch.cat([z, emb], dim=-1)                # (B, n_latent + d_emb)
+        h = self.input_proj(h)                         # (B, n_hidden)
+        h = self.trunk(h)                              # (B, n_hidden)
+        mu = self.head_mu(h)                           # (B, n_latent)
+        log_var = self.head_log_var(h).clamp(
+            self.log_var_min, self.log_var_max
+        )                                              # (B, n_latent)
+        z_next = z + mu                                # residual connection
+        return z_next, mu, log_var
 
 
 def heteroscedastic_nll(

@@ -219,3 +219,7 @@ __marimo__/
 .DS_Store
 */.DS_Store
 *.DS_Store
+# CellPath runtime directories (populated at runtime, not checked in)
+/data/
+/artifacts/
+/outputs/

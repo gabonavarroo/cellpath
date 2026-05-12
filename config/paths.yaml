@@ -1,5 +1,8 @@
+# @package paths
 # config/paths.yaml — single source of truth for every path.
 #
+# The @package paths directive nests this config under the "paths" key so that
+# cfg.paths.* is accessible and the ${paths.*} interpolations resolve correctly.
 # Sacred rule from CLAUDE.md §3: NEVER hardcode paths. If a path is missing here,
 # add it here and reference the new key — do not inline a literal string.
 

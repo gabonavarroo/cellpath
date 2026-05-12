@@ -29,25 +29,20 @@ class TestDynamicsConstruction:
 
 
 class TestDynamicsForward:
-    """These tests will pass once Agent B implements forward.
+    """Forward-pass tests — all implemented for Day 0."""
 
-    Currently xfail; remove xfail markers when forward is implemented.
-    """
-
-    @pytest.mark.xfail(reason="Agent B has not implemented forward pass yet.")
     def test_forward_shape(self) -> None:
         torch = _torch_or_skip()
         from src.models.dynamics import PerturbationDynamicsModel
 
         model = PerturbationDynamicsModel(n_latent=32, n_genes=100)
         z = torch.randn(8, 32)
-        g = torch.randint(0, 100, (8,))
+        g = torch.randint(1, 101, (8,))  # 1-indexed gene indices per Contract 2
         z_next, mu, log_var = model(z, g)
         assert z_next.shape == (8, 32)
         assert mu.shape == (8, 32)
         assert log_var.shape == (8, 32)
 
-    @pytest.mark.xfail(reason="Agent B has not implemented forward pass yet.")
     def test_log_var_clamped(self) -> None:
         torch = _torch_or_skip()
         from src.models.dynamics import PerturbationDynamicsModel
@@ -56,19 +51,18 @@ class TestDynamicsForward:
             n_latent=32, n_genes=10, log_var_min=-5.0, log_var_max=3.0
         )
         z = torch.randn(4, 32)
-        g = torch.randint(0, 10, (4,))
+        g = torch.randint(1, 11, (4,))  # 1-indexed
         _, _, log_var = model(z, g)
         assert (log_var >= -5.0 - 1e-3).all()
         assert (log_var <= 3.0 + 1e-3).all()
 
-    @pytest.mark.xfail(reason="Agent B has not implemented forward pass yet.")
     def test_residual_returns_z_plus_mu(self) -> None:
         torch = _torch_or_skip()
         from src.models.dynamics import PerturbationDynamicsModel
 
         model = PerturbationDynamicsModel(n_latent=32, n_genes=10)
         z = torch.randn(4, 32)
-        g = torch.randint(0, 10, (4,))
+        g = torch.randint(1, 11, (4,))  # 1-indexed
         z_next, mu, _ = model(z, g)
         assert torch.allclose(z_next, z + mu, atol=1e-5)
 

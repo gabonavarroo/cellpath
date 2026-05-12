@@ -34,6 +34,14 @@ import typer
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
+@app.callback()
+def _callback() -> None:
+    """CellPath — RL-based in-silico cancer cell-state steering pipeline.
+
+    Run ``python -m src.pipeline run --help`` for pipeline options.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Step implementations (each calls the relevant component module)
 # ---------------------------------------------------------------------------
@@ -126,13 +134,53 @@ def run(
         python -m src.pipeline run --config-name default --force vae
         python -m src.pipeline run --config-name default --skip evaluate
     """
-    # NOTE: implementation is shared. Compose Hydra config, set seed, log device, run steps in
-    # order. For each step, skip if artifact exists and step not in `force`. Always honor
-    # `--dry-run` which prints planned actions and exits.
-    raise NotImplementedError(
-        "Shared: implement Hydra compose + sequential step runner. "
-        "Honor --dry-run (print plan and exit). Use src.utils.seeding.set_seed + device logging."
-    )
+    import os
+
+    from hydra import compose, initialize_config_dir
+
+    from src.utils.device import device_summary
+    from src.utils.seeding import set_seed
+
+    repo_root = Path(__file__).resolve().parents[1]
+    config_dir = repo_root / "config"
+    os.environ.setdefault("CELLPATH_ROOT", str(repo_root))
+
+    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
+        cfg = compose(
+            config_name=config_name,
+            overrides=[f"paths.root={str(repo_root)}"],
+        )
+
+    set_seed(int(cfg.seed))
+    print(device_summary())
+
+    _steps = ["data", "vae", "pairs", "dynamics", "rl", "evaluate"]
+    _step_fns: dict[str, Any] = {
+        "data": step_data,
+        "vae": step_vae,
+        "pairs": step_pairs,
+        "dynamics": step_dynamics,
+        "rl": step_rl,
+        "evaluate": step_evaluate,
+    }
+
+    if dry_run:
+        print(f"DRY RUN — config={config_name}, seed={cfg.seed}")
+        print(f"  vae.n_latent={cfg.vae.n_latent}, "
+              f"dynamics.n_hidden={cfg.dynamics.n_hidden}, "
+              f"rl.ppo.total_timesteps={cfg.rl.ppo.total_timesteps}")
+        for step in _steps:
+            label = "SKIP " if step in skip else ("FORCE" if step in force else "RUN  ")
+            print(f"  {label} {step}")
+        print("DRY RUN — config validated OK. Exiting.")
+        return
+
+    for step_name in _steps:
+        if step_name in skip:
+            print(f"[pipeline] skipping {step_name}")
+            continue
+        print(f"[pipeline] running {step_name}...")
+        _step_fns[step_name](cfg, force=(step_name in force))
 
 
 def main() -> None:

@@ -132,7 +132,7 @@ def mock_gene_vocab(tmp_path: Path) -> Path:
         "genes": ["GENE_A", "GENE_B", "GENE_C", "GENE_D"],
         "ctrl_idx": 0,
         "n_genes": 4,
-        "noop_idx": 5,   # 0 = ctrl, 1..4 = genes, 5 = NO-OP at action-space level
+        "noop_idx": 4,   # RL action space: 0..3 = genes, 4 = NO-OP (= n_genes)
     }
     path = tmp_path / "gene_vocab.json"
     path.write_text(json.dumps(vocab))
@@ -146,16 +146,24 @@ def mock_gene_vocab(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def hydra_cfg() -> Any:
-    """Composed Hydra ``default`` config, with paths rerouted to a temporary dir.
+    """Composed Hydra ``default`` config, with paths rerouted to repo root.
 
     Tests that need real Hydra config should depend on this fixture. Tests that only need a
     simple namespace can use a plain ``types.SimpleNamespace``.
+
+    ``CELLPATH_ROOT`` is set to the repo root so that ``${oc.env:CELLPATH_ROOT,...}``
+    resolves without needing ``${hydra:runtime.cwd}`` (which requires a live Hydra run).
     """
-    hydra = pytest.importorskip("hydra")
+    pytest.importorskip("hydra")
     from hydra import compose, initialize_config_dir
 
     repo_root = Path(__file__).resolve().parents[1]
     config_dir = repo_root / "config"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
-        cfg = compose(config_name="default", overrides=["device.force=cpu"])
+        # Override paths.root with a concrete value so that ${paths.*} interpolations
+        # resolve without needing ${hydra:runtime.cwd} (only valid inside @hydra.main).
+        cfg = compose(
+            config_name="default",
+            overrides=["device.force=cpu", f"paths.root={str(repo_root)}"],
+        )
     return cfg

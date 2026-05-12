@@ -1,0 +1,19 @@
+# config/experiments/vae_ablation.yaml — ablate n_latent ∈ {16, 32, 64}.
+#
+# Run as multirun:
+#   python scripts/train_vae.py --multirun --config-name vae_ablation
+
+defaults:
+  - /default
+  - _self_
+
+experiment:
+  id: vae_ablation_n_latent
+  description: "Ablate scVI n_latent ∈ {16, 32, 64} with otherwise default settings."
+
+# Multirun sweep declared inline via hydra.sweeper.params
+hydra:
+  sweeper:
+    params:
+      vae.n_latent: 16,32,64
+      seed: 42,7,123

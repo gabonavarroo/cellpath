@@ -1,0 +1,51 @@
+# docker-compose orchestration. Use profiles to select environment.
+#
+#   docker compose --profile cuda up training       # cluster training
+#   docker compose --profile cpu  up smoke          # local smoke test
+#   docker compose up tensorboard                   # always available
+#
+# All services share ./artifacts as a bind mount so checkpoints / logs persist.
+services:
+
+  training:
+    profiles: ["cuda"]
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    image: cellpath:cuda
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CELLPATH_FORCE_DEVICE=cuda
+      - PYTHONPATH=/workspace
+    volumes:
+      - .:/workspace
+      - cellpath-data:/workspace/data
+      - cellpath-artifacts:/workspace/artifacts
+    command: python -m src.pipeline run --config-name default
+    shm_size: "16gb"
+
+  smoke:
+    profiles: ["cpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    image: cellpath:cpu
+    environment:
+      - CELLPATH_FORCE_DEVICE=cpu
+      - PYTHONPATH=/workspace
+    volumes:
+      - .:/workspace
+    command: python -m src.pipeline run --dry-run
+
+  tensorboard:
+    image: tensorflow/tensorflow:2.16.1
+    ports:
+      - "6006:6006"
+    volumes:
+      - cellpath-artifacts:/workspace/artifacts:ro
+    command: tensorboard --logdir /workspace/artifacts --host 0.0.0.0 --port 6006
+
+volumes:
+  cellpath-data:
+  cellpath-artifacts:

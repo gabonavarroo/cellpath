@@ -1,0 +1,10 @@
+# config/experiments/baseline.yaml — first run, all defaults.
+# Composes the default config and labels the run.
+
+defaults:
+  - /default
+  - _self_
+
+experiment:
+  id: baseline
+  description: "Default hyperparameters, single seed. Run on Day 0 to confirm wiring."

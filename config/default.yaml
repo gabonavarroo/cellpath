@@ -1,0 +1,74 @@
+# config/default.yaml — master Hydra config.
+#
+# Composes path config + per-component configs. Override on the CLI:
+#   python scripts/train_vae.py vae.n_latent=64 seed=7
+# Or compose with an experiment stack:
+#   python scripts/train_vae.py --config-name vae_ablation
+
+defaults:
+  - paths
+  - vae
+  - dynamics
+  - rl
+  - _self_
+
+# ---------------------------------------------------------------------------
+# Reproducibility
+# ---------------------------------------------------------------------------
+seed: 42                              # propagated via src.utils.seeding.set_seed
+
+# ---------------------------------------------------------------------------
+# Device
+# ---------------------------------------------------------------------------
+device:
+  force: null                          # "cpu" | "mps" | "cuda" | null (auto-detect)
+
+# ---------------------------------------------------------------------------
+# Data + preprocessing
+# ---------------------------------------------------------------------------
+data:
+  source: pertpy                      # "pertpy" | "scperturb" | "geo"
+  min_counts: 500                     # cell QC: drop cells with < N total UMIs
+  min_cells: 10                       # gene QC: drop genes detected in < N cells
+  n_hvg: 2000                         # highly variable genes — fed into scVI
+  hvg_flavor: seurat_v3               # uses raw counts (correct for NB likelihood)
+  normalize_total: 10000              # library-size target for visualization branch
+  log_transform: true                 # log1p after normalize_total
+
+# ---------------------------------------------------------------------------
+# Pairing (Agent A → Agent B handshake)
+# ---------------------------------------------------------------------------
+pairing:
+  method: ot                          # "ot" | "random" | "mean_delta"
+  ot_epsilon: 0.05                    # Sinkhorn entropic regularization
+  ot_iter: 500                        # Sinkhorn max iterations
+  normalize_cost: true                # divide cost matrix by median for stability
+  val_cell_fraction: 0.10             # within-perturbation held-out cells (primary gate)
+  ood_gene_fraction: 0.20             # held-out perturbations (OOD report)
+  combo_held_out_fraction: 0.20       # held-out combinations (composition test)
+  min_cells_per_perturbation: 30      # drop perturbations with fewer cells
+  pair_seed: 42                       # split RNG seed (decoupled from training seed)
+
+# ---------------------------------------------------------------------------
+# Logging + monitoring
+# ---------------------------------------------------------------------------
+log:
+  level: INFO
+  tensorboard_dir: ${paths.artifacts}/tensorboard
+  use_wandb: false
+  wandb_project: cellpath
+  wandb_entity: null
+  rich_traceback: true
+  log_every_n_steps: 50
+
+# ---------------------------------------------------------------------------
+# Hydra runtime overrides
+# ---------------------------------------------------------------------------
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false                      # keep the cwd at repo root

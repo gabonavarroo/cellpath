@@ -1,0 +1,117 @@
+[project]
+name = "cellpath"
+version = "0.1.0"
+description = "RL agent for in-silico cancer cell-state steering via learned gene regulatory dynamics over scVI latents."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "CellPath Team" }
+]
+
+# All dependencies are pinned to a narrow range for reproducibility.
+# Apple Silicon (MPS) developers use the wheels in `[project.optional-dependencies].dev-mac`.
+# CUDA cluster users use `[project.optional-dependencies].cuda` (installed inside Dockerfile.cuda).
+# CI uses `[project.optional-dependencies].cpu` for CPU-only smoke runs.
+dependencies = [
+    # Core numerics
+    "numpy>=1.26,<2.0",          # scvi-tools 1.1 not yet numpy 2.0-clean
+    "scipy>=1.11,<2.0",
+    "polars>=0.20,<1.0",         # tabular metadata, DepMap, gene lists
+    "pyarrow>=14.0,<17.0",       # polars parquet/csv backend
+
+    # Single-cell stack
+    "scanpy>=1.9,<2.0",
+    "anndata>=0.10,<0.11",
+    "scvi-tools>=1.1.0,<1.2",
+    "pertpy>=0.7,<1.0",           # primary Norman 2019 fetcher
+    "pyensembl>=2.2,<3.0",        # optional gene symbol harmonization
+
+    # Deep learning
+    "torch>=2.2,<2.5",
+    "lightning>=2.2,<3.0",        # scvi-tools depends on this
+    "torchmetrics>=1.3,<2.0",
+
+    # RL
+    "gymnasium>=0.29,<1.0",
+    "stable-baselines3>=2.3,<3.0",
+    "sb3-contrib>=2.3,<3.0",      # MaskablePPO
+
+    # Optimal transport (pseudo-pairing)
+    "POT>=0.9,<1.0",
+
+    # Config + logging
+    "hydra-core>=1.3,<2.0",
+    "omegaconf>=2.3,<3.0",
+    "tensorboard>=2.16,<3.0",
+    "rich>=13.7,<14.0",
+
+    # Visualization
+    "matplotlib>=3.8,<4.0",
+    "seaborn>=0.13,<1.0",
+    "umap-learn>=0.5,<1.0",
+
+    # ML utilities
+    "scikit-learn>=1.4,<2.0",
+    "statsmodels>=0.14,<1.0",     # multipletests for FDR
+
+    # CLI
+    "typer>=0.12,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-cov>=4.1,<6.0",
+    "pytest-xdist>=3.5,<4.0",
+    "ruff>=0.4,<1.0",
+    "mypy>=1.9,<2.0",
+    "nbstripout>=0.7,<1.0",
+    "jupyter>=1.0,<2.0",
+    "ipykernel>=6.29,<7.0",
+    "pre-commit>=3.7,<4.0",
+]
+wandb = [
+    "wandb>=0.16,<1.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# ---------------------------------------------------------------------------
+# Tool configuration
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["notebooks", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+exclude = ["notebooks", "artifacts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: tests that require real data download (skipped in CI)",
+    "integration: full pipeline integration tests",
+]
+addopts = "-ra --strict-markers"
+
+[tool.nbstripout]
+extra-keys = "metadata.kernelspec metadata.language_info.version"

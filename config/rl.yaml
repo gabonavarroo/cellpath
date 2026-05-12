@@ -1,0 +1,69 @@
+# config/rl.yaml — RL environment + PPO hyperparameters.
+# See ARCHITECTURE.md Concepts 4 + 5 for the why behind these defaults.
+
+rl:
+  # ----- Action space -----
+  action_space:
+    enable_knockout: false            # if true, requires a registered CRISPRi dataset
+                                      # (otherwise raises NotImplementedError)
+    include_noop: true                # final action index = NO-OP / terminate
+    repeat_mask: true                 # mask genes already used in the episode
+
+  # ----- Reference state -----
+  reference:
+    source: unperturbed_k562          # "unperturbed_k562" (v1) | "external_healthy" (future)
+    epsilon_percentile: 90            # data-driven ε from ||z_ctrl - z_ref|| distribution
+
+  # ----- Environment dynamics -----
+  env:
+    max_steps: 10                     # K — episode budget (ablate {5, 10, 20})
+    start_state: random_perturbation  # "random_perturbation" | "specific" | "uniform_latent"
+    start_state_perturbation: null    # only used if start_state == "specific"
+    distance_metric: l2               # "l2" | "cosine"
+    obs_includes_step: false          # include current step idx in observation (forces non-Markov)
+    obs_includes_mask: false          # include action mask in observation (sb3 handles it via info)
+    n_envs: 16                        # parallel envs
+
+  # ----- Reward -----
+  reward:
+    lambda_sparse: 0.05               # per-action sparsity penalty (ablate)
+    lambda_unc: 0.0                   # per-action uncertainty penalty (turn on for stretch)
+    success_bonus: 0.0                # optional terminal bonus on success
+    failure_penalty: 0.0              # optional terminal penalty on truncation
+    distance_scale: 1.0               # multiply distance term — tune if rewards are too small
+    intermediate_shaping: true        # reward at every step (vs sparse terminal-only)
+
+  # ----- PPO (MaskablePPO from sb3-contrib) -----
+  ppo:
+    total_timesteps: 2_000_000
+    n_steps: 1024                     # rollout length per env
+    batch_size: 256                   # PPO minibatch
+    n_epochs: 10                      # PPO inner epochs
+    lr: 3e-4
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    clip_range_vf: null
+    ent_coef: 0.01                    # entropy bonus
+    vf_coef: 0.5
+    max_grad_norm: 0.5
+    target_kl: null                   # set 0.01 for tighter PPO
+    use_sde: false
+    policy: MlpPolicy
+    policy_kwargs:
+      net_arch: [128, 128]
+      activation_fn: tanh
+
+  # ----- Training behavior -----
+  train:
+    eval_freq: 50_000                 # env steps
+    n_eval_episodes: 50
+    save_freq: 100_000
+    skip_gate: false                  # if true (CLI override), skips gate.json check WITH LOUD WARNING
+    log_action_distribution_every: 10_000
+
+  # ----- Evaluation -----
+  eval:
+    n_rollout_episodes: 500
+    deterministic: false              # stochastic rollouts capture exploration variety
+    save_rollouts_parquet: true

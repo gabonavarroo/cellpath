@@ -1,0 +1,55 @@
+# config/paths.yaml — single source of truth for every path.
+#
+# Sacred rule from CLAUDE.md §3: NEVER hardcode paths. If a path is missing here,
+# add it here and reference the new key — do not inline a literal string.
+
+# Project root (filled by src/utils/paths.py at runtime if needed)
+root: ${oc.env:CELLPATH_ROOT,${hydra:runtime.cwd}}
+
+# Data layout
+data: ${paths.root}/data
+data_raw: ${paths.data}/raw
+data_processed: ${paths.data}/processed
+norman_raw_h5ad: ${paths.data_raw}/norman_2019.h5ad
+norman_processed_h5ad: ${paths.data_processed}/norman_hvg.h5ad
+depmap_csv_raw: ${paths.data_raw}/depmap_chronos.csv
+depmap_k562_parquet: ${paths.data_processed}/depmap_k562_chronos.parquet
+
+# Future-work datasets (not in v1, registered for forward-compat)
+replogle_crispri_h5ad: ${paths.data_raw}/replogle_2022_crispri.h5ad  # NOT downloaded by v1
+healthy_reference_h5ad: ${paths.data_raw}/external_healthy_ref.h5ad   # NOT downloaded by v1
+
+# Artifact layout
+artifacts: ${paths.root}/artifacts
+
+vae_dir: ${paths.artifacts}/vae
+vae_model_dir: ${paths.vae_dir}/model
+vae_latents_h5ad: ${paths.vae_dir}/latents.h5ad
+vae_gene_vocab_json: ${paths.vae_dir}/gene_vocab.json
+vae_z_reference_centroid: ${paths.vae_dir}/z_reference_centroid.npy
+vae_epsilon_success_json: ${paths.vae_dir}/epsilon_success.json
+
+pairs_dir: ${paths.artifacts}/pairs
+pairs_train: ${paths.pairs_dir}/train_pairs.npz
+pairs_val: ${paths.pairs_dir}/val_pairs.npz
+pairs_ood: ${paths.pairs_dir}/ood_pairs.npz
+pairs_combo: ${paths.pairs_dir}/combo_pairs.npz
+pairs_metadata: ${paths.pairs_dir}/metadata.json
+
+dynamics_dir: ${paths.artifacts}/dynamics
+dynamics_model: ${paths.dynamics_dir}/model.pt
+dynamics_config: ${paths.dynamics_dir}/config.json
+dynamics_gate: ${paths.dynamics_dir}/gate.json
+dynamics_val_metrics: ${paths.dynamics_dir}/val_metrics.json
+dynamics_ood_metrics: ${paths.dynamics_dir}/ood_metrics.json
+
+rl_dir: ${paths.artifacts}/rl
+rl_ppo_zip: ${paths.rl_dir}/ppo.zip
+rl_rollouts_parquet: ${paths.rl_dir}/rollouts.parquet
+rl_success_curves_png: ${paths.rl_dir}/success_curves.png
+rl_action_freq_json: ${paths.rl_dir}/action_freq.json
+
+eval_dir: ${paths.artifacts}/eval
+eval_depmap_csv: ${paths.eval_dir}/depmap_enrichment.csv
+eval_figures_dir: ${paths.eval_dir}/figures
+eval_ablations_dir: ${paths.eval_dir}/ablations

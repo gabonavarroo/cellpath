@@ -1,0 +1,46 @@
+# config/dynamics.yaml — perturbation dynamics MLP hyperparameters.
+# See ARCHITECTURE.md Concept 3 for the why behind these defaults.
+
+dynamics:
+  # Architecture
+  d_emb: 64                           # gene-embedding dimension
+  n_hidden: 256                       # MLP width
+  n_layers: 3                         # number of residual blocks
+  activation: silu                    # "silu" | "relu" | "gelu"
+  dropout: 0.1
+  use_layernorm: true
+
+  # Heteroscedastic head
+  log_var_min: -5.0                   # clamp on predicted log σ²
+  log_var_max: 3.0
+  log_var_init_bias: -2.0             # initial bias for log_var head; avoids early overconfidence
+
+  # Loss
+  loss: heteroscedastic_nll           # "heteroscedastic_nll" | "mse"
+  lambda_combo: 0.5                   # weight on composition loss for combo pairs
+  lambda_log_var_reg: 0.01            # mild penalty on |log_var| to discourage extremes
+
+  # Optimizer
+  lr: 1e-3
+  weight_decay: 1e-5
+  batch_size: 256
+  optimizer: adamw                    # "adamw" | "adam" | "sgd"
+
+  # Schedule
+  max_epochs: 100
+  early_stop_patience: 10
+  scheduler: cosine                   # "cosine" | "step" | "none"
+  warmup_steps: 500
+
+  # Validation
+  validate_every_n_epochs: 1
+  num_workers: 0                      # set higher on cluster
+
+  # Gate (these thresholds match PHASES.md Phase 2)
+  gate:
+    margin_vs_noop_r2: 0.10
+    margin_vs_global_mean_r2: 0.05
+    margin_vs_per_gene_mean_r2: 0.0   # tie acceptable; no regression
+    margin_vs_linear_ridge_pearson: 0.03
+    margin_vs_knn_r2: 0.03
+    min_uncertainty_calibration_spearman: 0.20

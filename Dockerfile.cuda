@@ -1,0 +1,43 @@
+# CUDA image for the teacher's cluster (linux/amd64, CUDA 12.1).
+# Build:  docker build -f Dockerfile.cuda -t cellpath:cuda .
+# Run :   docker run --gpus all -v $(pwd):/workspace cellpath:cuda \
+#             python -m src.pipeline run --config-name default
+#
+# Notes:
+#   * MPS does NOT pass through to Linux containers on Apple Silicon. For local
+#     dev on Macs, use `uv venv && uv pip install -e .` instead of this image.
+#   * The cluster has 128 GB unified RAM (per project brief); training inside the
+#     container should not need more than ~32 GB even with full Norman data.
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_SYSTEM_PYTHON=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-venv python3.11-dev python3-pip \
+        git curl ca-certificates build-essential \
+        libhdf5-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+
+# uv for fast installs
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /usr/local/bin/uv
+
+WORKDIR /workspace
+
+COPY pyproject.toml requirements.txt /workspace/
+RUN uv pip install --system \
+        torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121 \
+    && uv pip install --system -r requirements.txt
+
+COPY . /workspace
+RUN uv pip install --system -e .
+
+ENV PYTHONPATH=/workspace
+CMD ["python", "-m", "src.pipeline", "--help"]

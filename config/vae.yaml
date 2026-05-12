@@ -1,0 +1,41 @@
+# config/vae.yaml — scVI hyperparameters.
+# See ARCHITECTURE.md Concept 1 + 2 for the why behind these defaults.
+
+vae:
+  # Latent geometry
+  n_latent: 32                        # ablation: 16 / 32 / 64
+  n_layers: 2                         # encoder/decoder depth
+  n_hidden: 128                       # hidden width
+
+  # Regularization
+  dropout_rate: 0.1                   # encoder/decoder dropout
+
+  # Likelihood — NB by default (see Concept 1)
+  gene_likelihood: nb                 # "nb" | "zinb" | "poisson"
+  dispersion: gene                    # "gene" | "gene-cell"
+  latent_distribution: normal         # "normal" | "ln" (logistic-normal)
+
+  # Optimizer
+  lr: 1e-3
+  weight_decay: 1e-6
+  batch_size: 128
+
+  # Training schedule
+  max_epochs: 400
+  early_stopping: true
+  early_stopping_patience: 45
+  early_stopping_monitor: elbo_validation
+
+  # AnnData setup
+  setup:
+    layer: counts                     # MANDATORY: scVI must consume raw integer counts
+    batch_key: null                   # set if Norman batches are known to confound
+    labels_key: null
+    categorical_covariate_keys: []
+    continuous_covariate_keys: []
+
+  # Outputs
+  save_overwrite: true                # model.save(..., overwrite=true)
+  compute_z_reference: true           # write z_reference_centroid.npy after training
+  compute_epsilon_success: true       # write epsilon_success.json after training
+  epsilon_percentile: 90              # default percentile for ε (overridden by rl.reference)

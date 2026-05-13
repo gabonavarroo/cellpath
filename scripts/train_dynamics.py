@@ -258,17 +258,34 @@ def main(cfg: DictConfig) -> int:
 
     if model_path.exists() and not cfg.get("force", False):
         saved_cfg_path = Path(cfg.paths.dynamics_config)
+        mismatches: list[str] = []
         if saved_cfg_path.exists():
             saved = json.loads(saved_cfg_path.read_text())
             if saved.get("n_genes") != n_genes:
-                log.warning(
-                    "Existing checkpoint was trained with n_genes=%d but current "
-                    "data has n_genes=%d. Run with force=true to retrain.",
-                    saved.get("n_genes"),
-                    n_genes,
+                mismatches.append(
+                    f"n_genes: saved={saved.get('n_genes')}  current={n_genes}"
                 )
+            if saved.get("n_latent") != n_latent:
+                mismatches.append(
+                    f"n_latent: saved={saved.get('n_latent')}  current={n_latent}"
+                )
+            meta_path = Path(cfg.paths.pairs_metadata)
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+                current_source = "mock" if meta.get("pairing_method") == "mock" else "real"
+                if saved.get("trained_on") != current_source:
+                    mismatches.append(
+                        f"trained_on: saved={saved.get('trained_on')}  current={current_source}"
+                    )
+        if mismatches:
+            raise RuntimeError(
+                f"Checkpoint at {model_path} is incompatible with current data:\n"
+                + "\n".join(f"  • {m}" for m in mismatches)
+                + "\nRerun with +force=true to retrain from scratch."
+            )
         log.info(
-            "Checkpoint found at %s — skipping training. Pass force=true to retrain.",
+            "Checkpoint found at %s — config matches, skipping training. "
+            "Pass +force=true to retrain.",
             model_path,
         )
         return 0

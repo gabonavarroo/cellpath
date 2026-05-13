@@ -209,16 +209,16 @@ plausibility test). User-confirmed scope:
 - [x] Tests collect and pass (with most marked `xfail` until agents implement).
 - [x] Notebooks 01/02/03 scaffolded.
 - [ ] `make setup` validated on both engineers' machines.
-- [ ] `make data` validated (Norman + DepMap download).
-- [ ] `generate_mock_pairs` (Agent A Day 0 deliverable) implemented.
-- [ ] First commit + push.
+- [x] `make data` validated (Norman + DepMap download).
+- [x] `generate_mock_pairs` (Agent A Day 0 deliverable) implemented.
+- [x] First commit + push.
 
 ### Phase 1 — Days 1–3 (Data + VAE  ||  Dynamics architecture)
-- [ ] [A] `src.data.download` real path implemented.
-- [ ] [A] `src.data.preprocess.run_preprocessing` end-to-end.
-- [ ] [A] `src.models.vae.train_vae` produces all four Contract-1 artifacts.
-- [ ] [A] ELBO converges; silhouette ≥ 0.05.
-- [ ] [B] `PerturbationDynamicsModel.forward` implemented; shape tests pass (remove xfail).
+- [x] [A] `src.data.download` real path implemented.
+- [x] [A] `src.data.preprocess.run_preprocessing` end-to-end.
+- [x] [A] `src.models.vae.train_vae` produces all four Contract-1 artifacts.
+- [ ] [A] ELBO converges; silhouette ≥ 0.05. (ELBO ✓; silhouette pending latent analysis)
+- [x] [B] `PerturbationDynamicsModel.forward` implemented; shape tests pass (remove xfail).
 - [ ] [B] `heteroscedastic_nll` + `composition_loss` implemented.
 - [ ] [B] Dynamics smoke train on mock pairs; loss decreases.
 

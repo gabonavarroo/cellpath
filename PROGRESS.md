@@ -6,6 +6,59 @@
 
 ---
 
+## Session 2026-05-13-1500 (agent: B)
+
+**Phase:** 2 — Dynamics Validation Gate machinery (Days 4–6).
+
+**Status:** Phase 2 Agent B gate machinery complete. Four metric functions implemented and
+tested. Gate is ready to be wired into `scripts/train_dynamics.py` once real OT pairs are
+available (Agent A Phase 2 dependency).
+
+- Implemented four Phase 2 functions in `src/analysis/metrics.py` (replacing stubs):
+  - `predictive_r2` — pooled R² over all latent dims; sklearn-style constant-input semantics.
+  - `pearson_r_per_dim` — vectorised per-dim Pearson R; NaN/constant columns → 0.0.
+  - `uncertainty_calibration_spearman` — Spearman ρ between exp(log_var) and squared error.
+  - `dynamics_validation_gate` — five baselines (no-op, global-mean Δ, per-gene-mean Δ,
+    ridge, kNN-5) + uncertainty calibration; returns JSON-safe dict per AGENTS.md Contract 3.
+- Added four private helpers: `_as_float32`, `_cfg_value`, `_one_hot_genes`, `_safe_float`.
+- Created `tests/test_metrics.py` with 28 tests (28/28 pass, 0.56 s). Covers: shape contracts,
+  edge cases (constant arrays, unseen genes, kNN k-clamping, NaN safety), JSON serializability,
+  dict+SimpleNamespace cfg access, pass/fail gate logic, train/val data isolation.
+- Design decisions recorded:
+  - `predictive_r2` uses sklearn-style semantics for `ss_tot == 0` (see plan).
+  - `uncertainty_calibration_spearman` compares `exp(log_var_pred)` vs squared error.
+  - `dynamics_validation_gate` operates on one split per call; caller merges primary + ood
+    into final `gate.json` (avoids bloating the function signature with OOD arrays).
+  - `baselines_train_data=None` raises `ValueError` (no silent defaults).
+- Full test run: 49 passed, 1 skipped, 1 pre-existing failure (`test_run_preprocessing_with_mock`
+  — pandas `ArrowStringArray` / anndata incompatibility, not introduced by this session).
+
+**Metrics:**
+
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| Dynamics — `predictive_r2` implemented | ✓ | ✓ | done |
+| Dynamics — `pearson_r_per_dim` implemented | ✓ | ✓ | done |
+| Dynamics — `uncertainty_calibration_spearman` implemented | ✓ | ✓ | done |
+| Dynamics — `dynamics_validation_gate` implemented | ✓ | ✓ | done |
+| Dynamics — primary gate passed on real data | passed | — | blocked on OT pairs (Agent A) |
+| Dynamics — uncertainty calibration | Spearman ≥ 0.20 | — | blocked on trained model |
+
+**Blockers:** P1 — Real OT pairs not yet built (Agent A Phase 2). Gate wiring into
+`scripts/train_dynamics.py` is deferred until `artifacts/pairs/val_pairs.npz` exists.
+The commented Phase 2 hook at `scripts/train_dynamics.py:514-533` is ready to uncomment.
+
+**Next:**
+
+1. **[Agent A]** Implement `src/data/perturbation_pairs.py::build_pairs()` OT pairing;
+   produce `artifacts/pairs/train_pairs.npz`, `val_pairs.npz`, `ood_pairs.npz`.
+2. **[Agent B]** Uncomment the Phase 2 hook in `scripts/train_dynamics.py` once real pairs
+   exist; run `make dynamics`; verify `gate.json.passed=True`.
+3. **[Agent B]** If gate fails: check `val_metrics.json` per-baseline margins; likely fix is
+   more epochs or lower `lambda_combo` (see EXPERIMENTS.md AB-06 ablation).
+
+---
+
 ## Session 2026-05-13-1100 (agent: A)
 
 **Phase:** 1 — Data + VAE (Days 1–3). Phase 1 Agent A deliverables complete. VAE trained and all Contract-1 artifacts verified.
@@ -219,15 +272,15 @@ plausibility test). User-confirmed scope:
 - [x] [A] `src.models.vae.train_vae` produces all four Contract-1 artifacts.
 - [x] [A] ELBO converges; silhouette reported. (ELBO ✓; silhouette = −0.059, informational — see PHASES.md Phase 2 note)
 - [x] [B] `PerturbationDynamicsModel.forward` implemented; shape tests pass (remove xfail).
-- [ ] [B] `heteroscedastic_nll` + `composition_loss` implemented.
-- [ ] [B] Dynamics smoke train on mock pairs; loss decreases.
+- [x] [B] `heteroscedastic_nll` + `composition_loss` implemented.
+- [x] [B] Dynamics smoke train on mock pairs; loss decreases.
 
 ### Phase 2 — Days 4–6 (Latent validation  ||  Dynamics training + gate)
 - [ ] [A] OT pairing implemented; `build_pairs` writes all four .npz files.
 - [ ] [A] `src.analysis.latent_space.analyze_latent_quality` produces UMAP + silhouette + ARI.
-- [ ] [B] `dynamics_validation_gate` in `metrics.py` implemented.
-- [ ] [B] Primary gate **passes** on real data; `gate.json.passed=True`.
-- [ ] [B] OOD metrics reported.
+- [x] [B] `dynamics_validation_gate` in `metrics.py` implemented (+ `predictive_r2`, `pearson_r_per_dim`, `uncertainty_calibration_spearman`; 28 tests pass).
+- [ ] [B] Primary gate **passes** on real data; `gate.json.passed=True`. (blocked on OT pairs)
+- [ ] [B] OOD metrics reported. (blocked on OT pairs)
 
 ### Phase 3 — Days 7–9 (Analysis  ||  RL env + PPO)
 - [ ] [A] `src.analysis.depmap_validation.run_depmap_enrichment` implemented.

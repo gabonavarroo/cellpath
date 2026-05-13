@@ -17,12 +17,26 @@ by 10x Chromium v3 single-cell RNA-seq. Effective contents:
 
 | Quantity | Value |
 |---|---|
-| Total cells (post-QC, published) | ~111,255 |
-| Total genes profiled | ~19,018 |
-| Distinct single-gene CRISPRa targets | ~106 |
-| Distinct dual-gene combinations | ~131 |
-| Non-targeting (NT) guide cells (controls) | ~10,000 |
+| Total cells (post-QC, scperturb build) | 111,445 |
+| Total genes profiled (scperturb build) | 33,694 |
+| Distinct single-gene CRISPRa targets | 105 |
+| Distinct dual-gene combinations | 131 |
+| Control (NT-guide) cells | 11,855 |
 | Modality | **CRISPR activation only (gain-of-function)** — no knockouts |
+
+**scperturb build vs original GEO.** We download from the scperturb Zenodo curated build
+(Peidli et al. 2024, *Nature Methods*) rather than the raw GEO MTX. The curated build has
+33,694 genes (vs ~19,018 in GEO after basic QC) because scperturb retains genes that would
+normally be filtered; our preprocessing applies `filter_genes(min_cells=10)` which reduces
+this to a biologically appropriate working set before HVG selection.
+
+**Key format differences from original GEO (important for preprocessing):**
+
+- Control label: ``"control"`` (not ``"ctrl"`` as sometimes cited).
+- Combo separator: ``"_"`` (e.g. ``"KLF1_BAK1"``), not ``"+"`` as in some documentation.
+  Use the ``nperts`` column (0=ctrl, 1=single, 2=combo) to reliably identify perturbation type.
+- ``adata.X``: raw UMI counts stored as float32 sparse matrix (integers, no pre-normalisation).
+  Copy to ``layers["counts"]`` as int32 before any normalisation step.
 
 **Why this dataset.** It is the largest publicly available Perturb-seq study that includes
 substantial dual-gene combinations, which lets us *test composition* — does our dynamics model
@@ -152,17 +166,24 @@ adata = adata[:, adata.var["highly_variable"]].copy()
 ### 2.7 Perturbation encoding
 
 ```python
-unique_perturbations = sorted(adata.obs["perturbation"].unique())
-ctrl_label = "control" if "control" in unique_perturbations else "ctrl"
+# Use nperts column (0=ctrl, 1=single, 2=combo) to separate categories reliably.
+# Combo separator in scperturb build is "_" (e.g. "KLF1_BAK1"), not "+".
+ctrl_label = "control"   # scperturb Norman uses "control", not "ctrl"
+combo_labels = set(adata.obs.loc[adata.obs["nperts"] == 2, "perturbation"].unique())
+single_labels = sorted(p for p in unique_perts if p != ctrl_label and p not in combo_labels)
 encoder = {ctrl_label: 0}
-for i, p in enumerate(x for x in unique_perturbations if x != ctrl_label):
-    encoder[p] = i + 1
+for i, p in enumerate(single_labels, start=1):
+    encoder[p] = i
+for i, p in enumerate(sorted(combo_labels), start=len(single_labels) + 1):
+    encoder[p] = i
 adata.obs["perturbation_idx"] = adata.obs["perturbation"].map(encoder).astype("int32")
+adata.uns["noop_idx"] = len(single_labels)  # RL NO-OP action index = n_single_genes
 ```
 
-**Why.** The RL action space is `Discrete(N_genes + 1)`. `perturbation_idx = 0` is the control;
-`1..N_genes` are the single-gene CRISPRa targets; the NO-OP action gets index `N_genes` at
-runtime. Combinatorial perturbations have their own encoding (see §3).
+**Why.** The RL action space is `Discrete(N_single_genes + 1)`. `perturbation_idx = 0` is
+the control; `1..N_single` are the single-gene CRISPRa targets; `N_single` is the NO-OP
+action index. Combinatorial perturbations have higher indices and are used only for the
+dynamics composition loss, not in the RL action space directly.
 
 ### 2.8 Final saved file
 

@@ -37,6 +37,7 @@ class TestHydraConfig:
         assert hydra_cfg.vae.setup.layer == "counts"
 
 
+@pytest.mark.slow
 @pytest.mark.xfail(reason="Pipeline implementation is shared and not done yet.")
 def test_mock_pipeline(tmp_path) -> None:
     """End-to-end on synthetic data: should be possible once all stubs are filled."""

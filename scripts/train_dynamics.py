@@ -124,7 +124,7 @@ def _resolve_n_genes(cfg: DictConfig, train_path: Path) -> int:
     """Infer ``n_genes`` with a three-level fallback chain.
 
     1. ``gene_vocab.json`` — written by Agent A after VAE training (real Norman path).
-    2. ``pairs/metadata.json`` — written by ``generate_mock_pairs`` (mock path).
+    2.q ``pairs/metadata.json`` — written by ``generate_mock_pairs`` (mock path).
     3. ``int(train_pairs['gene_idx'].max())`` — last-resort defensive inference.
     """
     vocab_path = Path(cfg.paths.vae_gene_vocab_json)

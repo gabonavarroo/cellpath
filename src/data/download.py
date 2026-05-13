@@ -2,15 +2,37 @@
 
 Owner: Agent A. See DATA.md §1 (Norman download) and §5 (DepMap).
 
-Primary path uses ``pertpy.dt.norman_2019``; ``scperturb`` and GEO MTX paths are documented
-fallbacks. Checksums are pinned in ``scripts/download_data.sh`` and verified after each
-download — checksum mismatch fails loudly, never silently updated.
+Download strategy
+-----------------
+Norman 2019:
+  Primary  : ``pertpy.dt.norman_2019()``  (requires jax; may fail on some systems)
+  Fallback : scperturb Zenodo h5ad  (always works; curl + no Python deps beyond anndata)
+  Last resort: GEO MTX tarball (manual; not auto-attempted)
+
+DepMap Chronos:
+  DepMap now uses a two-step signed-URL system. The helper downloads a manifest
+  CSV, extracts the real Google Cloud Storage URL for CRISPRGeneEffect.csv, then
+  fetches the actual file. This is forward-compatible with future DepMap releases.
 """
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
+import urllib.request
 from pathlib import Path
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Norman 2019
+# ---------------------------------------------------------------------------
+
+SCPERTURB_ZENODO_URL = (
+    "https://zenodo.org/records/10044268/files/"
+    "NormanWeissman2019_filtered.h5ad?download=1"
+)
 
 
 def download_norman(
@@ -24,59 +46,123 @@ def download_norman(
     target_path
         Where to write ``norman_2019.h5ad``. Parent directory is created if missing.
     source
-        One of ``"pertpy"`` | ``"scperturb"`` | ``"geo"``. Use ``"pertpy"`` unless it fails.
+        ``"pertpy"`` (primary) | ``"scperturb"`` (Zenodo fallback) | ``"geo"`` (last resort).
+        If ``"pertpy"`` fails (e.g. jaxlib not present), call again with ``"scperturb"``.
 
     Returns
     -------
     Path
         Absolute path to the written file.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement the three branches. For ``"pertpy"``: call
-        ``pertpy.dt.norman_2019()`` and ``adata.write_h5ad(target_path)``. For ``"scperturb"``:
-        ``urllib`` download from the pinned Zenodo URL. For ``"geo"``: tar + per-sample MTX
-        stitching (last resort).
-
-    Notes
-    -----
-    The downloaded file's expected shape is approximately ``(111_255, 19_018)``. Verify
-    with ``anndata.read_h5ad(...).shape`` after download.
     """
-    raise NotImplementedError(
-        "Agent A: implement Norman 2019 download. Primary: pertpy.dt.norman_2019(). "
-        "Fallbacks: scperturb Zenodo URL + GEO MTX. Verify shape ≈ (111255, 19018)."
-    )
+    target_path = Path(target_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if source == "pertpy":
+        import pertpy as pt
+        adata = pt.dt.norman_2019()
+        adata.write_h5ad(str(target_path))
+
+    elif source == "scperturb":
+        urllib.request.urlretrieve(SCPERTURB_ZENODO_URL, target_path)
+        _assert_h5ad_valid(target_path, min_obs=50_000)
+
+    elif source == "geo":
+        raise NotImplementedError(
+            "GEO MTX fallback requires manual download. "
+            "See DATA.md §1.1 for instructions."
+        )
+    else:
+        raise ValueError(f"Unknown source {source!r}. Choose 'pertpy', 'scperturb', or 'geo'.")
+
+    _assert_h5ad_valid(target_path, min_obs=50_000)
+    return target_path.resolve()
+
+
+def _assert_h5ad_valid(path: Path, min_obs: int) -> None:
+    import anndata
+    adata = anndata.read_h5ad(str(path))
+    if adata.n_obs < min_obs:
+        raise RuntimeError(
+            f"Downloaded AnnData looks truncated: shape={adata.shape} "
+            f"(expected ≥{min_obs:,} cells). Re-download."
+        )
+
+
+# ---------------------------------------------------------------------------
+# DepMap Chronos
+# ---------------------------------------------------------------------------
+
+DEPMAP_MANIFEST_URL = (
+    "https://depmap.org/portal/api/download/files?file_name=CRISPRGeneEffect.csv"
+)
 
 
 def download_depmap_k562(
     target_csv: str | Path,
-    release: str = "24Q2",
+    release: str = "latest",
 ) -> Path:
-    """Download the DepMap Chronos table (used to extract K562 essentiality scores).
+    """Download the DepMap CRISPRGeneEffect.csv via the two-step manifest API.
+
+    DepMap uses signed Google Cloud Storage URLs that expire. The approach:
+    1. Fetch the manifest CSV (lists all available files + their signed GCS URLs).
+    2. Filter for ``filename == "CRISPRGeneEffect.csv"``, pick the first match
+       (newest release first in the manifest).
+    3. Download from the GCS URL.
 
     Parameters
     ----------
     target_csv
         Where to write ``depmap_chronos.csv``.
     release
-        DepMap release identifier (default ``"24Q2"``).
+        ``"latest"`` picks the first (newest) entry in the manifest. Pass an
+        explicit release name (e.g. ``"DepMap Public 24Q2"``) to pin a version.
 
     Returns
     -------
     Path
         Absolute path to the written CSV.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement using the DepMap public download API.
     """
-    raise NotImplementedError(
-        "Agent A: implement DepMap Chronos CSV download. See DATA.md §5.1 for the URL pattern."
-    )
+    target_csv = Path(target_csv)
+    target_csv.parent.mkdir(parents=True, exist_ok=True)
 
+    # Step 1 — fetch manifest
+    with urllib.request.urlopen(DEPMAP_MANIFEST_URL, timeout=30) as r:
+        content = r.read().decode("utf-8")
+
+    reader = csv.DictReader(io.StringIO(content))
+    matches = [row for row in reader if row.get("filename") == "CRISPRGeneEffect.csv"]
+
+    if not matches:
+        raise RuntimeError(
+            "CRISPRGeneEffect.csv not found in the DepMap manifest. "
+            f"Manifest URL: {DEPMAP_MANIFEST_URL}"
+        )
+
+    if release == "latest":
+        chosen = matches[0]
+    else:
+        candidates = [m for m in matches if m["release"] == release]
+        if not candidates:
+            available = [m["release"] for m in matches]
+            raise ValueError(
+                f"Release {release!r} not found. Available: {available}"
+            )
+        chosen = candidates[0]
+
+    gcs_url = chosen["url"]
+    print(f"  Downloading DepMap {chosen['release']} CRISPRGeneEffect.csv...")
+    urllib.request.urlretrieve(gcs_url, target_csv)
+
+    if not target_csv.exists() or target_csv.stat().st_size < 1_000_000:
+        raise RuntimeError(
+            f"DepMap download appears empty or too small: {target_csv.stat().st_size} bytes."
+        )
+    return target_csv.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
 
 def verify_checksum(path: str | Path, expected_sha256: str) -> bool:
     """Verify a file's SHA-256 checksum.
@@ -91,22 +177,20 @@ def verify_checksum(path: str | Path, expected_sha256: str) -> bool:
     Returns
     -------
     bool
-        True if the checksum matches.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement with ``hashlib.sha256`` streaming over 4 MB chunks.
-    FileNotFoundError
-        If ``path`` does not exist.
+        True if checksums match. Never silently updates the digest.
     """
-    raise NotImplementedError(
-        "Agent A: streaming sha256 over 4 MB chunks. Return bool, never auto-update the digest."
-    )
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest() == expected_sha256.lower()
 
 
 def load_processed_anndata(path: str | Path) -> Any:
-    """Load the preprocessed Norman h5ad with schema validation.
+    """Load the preprocessed Norman h5ad and validate its schema.
 
     Parameters
     ----------
@@ -116,18 +200,30 @@ def load_processed_anndata(path: str | Path) -> Any:
     Returns
     -------
     anndata.AnnData
-        AnnData with ``layers["counts"]`` (raw integer UMIs) and ``X`` (log-normalized HVG).
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement and verify schema (layers, obs keys, var keys, uns keys).
-    FileNotFoundError
-        If ``path`` doesn't exist.
-    ValueError
-        If required schema fields (``layers["counts"]``, ``obs["perturbation_idx"]``, etc.) are
-        missing.
+        With ``layers["counts"]`` (raw integer UMIs) and ``X`` (log-normalised HVG).
     """
-    raise NotImplementedError(
-        "Agent A: anndata.read_h5ad + schema check. Required fields per DATA.md §2.8."
-    )
+    import anndata
+
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Processed AnnData not found: {path}. "
+            "Run preprocessing first (make pipeline or scripts/train_vae.py)."
+        )
+    adata = anndata.read_h5ad(str(path))
+    _validate_processed_schema(adata, str(path))
+    return adata
+
+
+def _validate_processed_schema(adata: Any, path_hint: str = "") -> None:
+    loc = f" in {path_hint}" if path_hint else ""
+    if "counts" not in adata.layers:
+        raise ValueError(
+            f"Missing layers['counts']{loc}. "
+            "scVI requires raw integer counts; was the preprocessing step skipped?"
+        )
+    for col in ["perturbation", "perturbation_idx"]:
+        if col not in adata.obs.columns:
+            raise ValueError(f"Missing obs['{col}']{loc}.")
+    if "perturbation_encoder" not in adata.uns:
+        raise ValueError(f"Missing uns['perturbation_encoder']{loc}.")

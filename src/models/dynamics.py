@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 
@@ -191,15 +192,13 @@ def heteroscedastic_nll(
     -------
     torch.Tensor
         Scalar mean NLL across the batch and latent dims.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent B: implement the formula above.
     """
-    raise NotImplementedError(
-        "Agent B: heteroscedastic Gaussian NLL with the formula in the docstring."
-    )
+    precision = torch.exp(-log_var)
+    per_element = 0.5 * precision * (target_delta - mu).pow(2) + 0.5 * log_var
+    loss = per_element.mean()
+    if log_var_reg > 0.0:
+        loss = loss + log_var_reg * log_var.pow(2).mean()
+    return loss
 
 
 def composition_loss(
@@ -231,12 +230,12 @@ def composition_loss(
     torch.Tensor
         Scalar MSE between predicted and empirical post-double-perturbation latent.
 
-    Raises
-    ------
-    NotImplementedError
-        Agent B: implement ``z_after_a = model(z_ctrl, a).z_next`` then
-        ``z_after_ab = model(z_after_a, b).z_next`` and MSE against ``z_pert_ab``.
+    Notes
+    -----
+    ``gene_idx_a`` and ``gene_idx_b`` must be ``LongTensor`` (1-indexed per Contract 2).
+    Gradients flow through both forward passes; do **not** detach ``z_next_a`` so that
+    composability is the actual training signal.
     """
-    raise NotImplementedError(
-        "Agent B: chained forward + MSE. Used in DATA.md §3 / PHASES.md Phase 1 dynamics training."
-    )
+    z_next_a, _, _ = model(z_ctrl, gene_idx_a)
+    z_next_ab, _, _ = model(z_next_a, gene_idx_b)
+    return F.mse_loss(z_next_ab, z_pert_ab)

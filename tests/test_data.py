@@ -136,27 +136,132 @@ class TestMockPairs:
 
 
 class TestPairing:
-    def test_pair_ot_is_stubbed(self) -> None:
-        from src.data.perturbation_pairs import pair_ot
-
-        z_ctrl = np.random.randn(10, 32).astype("float32")
-        z_pert = np.random.randn(15, 32).astype("float32")
-        with pytest.raises(NotImplementedError, match="Agent A"):
-            pair_ot(z_ctrl, z_pert)
-
-    def test_pair_random_is_stubbed(self) -> None:
+    def test_pair_random_shape_and_range(self) -> None:
         from src.data.perturbation_pairs import pair_random
 
-        z_ctrl = np.random.randn(10, 32).astype("float32")
-        z_pert = np.random.randn(15, 32).astype("float32")
         rng = np.random.default_rng(0)
-        with pytest.raises(NotImplementedError, match="Agent A"):
-            pair_random(z_ctrl, z_pert, rng)
+        z_ctrl = np.random.randn(50, 32).astype("float32")
+        z_pert = np.random.randn(20, 32).astype("float32")
+        idx = pair_random(z_ctrl, z_pert, rng)
+        assert idx.shape == (20,)
+        assert idx.dtype == np.int64
+        assert (idx >= 0).all() and (idx < 50).all()
 
-    def test_pair_mean_delta_is_stubbed(self) -> None:
+    def test_pair_mean_delta_shape_and_range(self) -> None:
         from src.data.perturbation_pairs import pair_mean_delta
 
-        z_ctrl = np.random.randn(10, 32).astype("float32")
-        z_pert = np.random.randn(15, 32).astype("float32")
-        with pytest.raises(NotImplementedError, match="Agent A"):
-            pair_mean_delta(z_ctrl, z_pert)
+        z_ctrl = np.random.randn(50, 32).astype("float32")
+        z_pert = np.random.randn(20, 32).astype("float32")
+        idx = pair_mean_delta(z_ctrl, z_pert)
+        assert idx.shape == (20,)
+        assert idx.dtype == np.int64
+        assert (idx >= 0).all() and (idx < 50).all()
+
+    def test_pair_ot_shape_and_range(self) -> None:
+        from src.data.perturbation_pairs import pair_ot
+
+        rng = np.random.default_rng(0)
+        z_ctrl = np.random.randn(30, 8).astype("float32")
+        z_pert = np.random.randn(10, 8).astype("float32")
+        idx = pair_ot(z_ctrl, z_pert, epsilon=0.1)
+        assert idx.shape == (10,)
+        assert idx.dtype == np.int64
+        assert (idx >= 0).all() and (idx < 30).all()
+
+    def test_build_pairs_contract_schema(self, tmp_path: Any) -> None:
+        """build_pairs on synthetic data must produce Contract-2-compliant files."""
+        import types, anndata
+
+        # Small synthetic AnnData matching the processed Norman schema
+        n_ctrl, n_genes, n_latent = 80, 4, 8
+        rng = np.random.default_rng(0)
+
+        n_cells_per_gene = 20
+        n_combo = 2
+        n_total = n_ctrl + n_genes * n_cells_per_gene + n_combo * 10
+
+        pert_labels = (
+            ["control"] * n_ctrl
+            + [f"GENE_{g}" for g in "ABCD" for _ in range(n_cells_per_gene)]
+            + ["GENE_A_GENE_B"] * 10
+            + ["GENE_C_GENE_D"] * 10
+        )
+        nperts_col = (
+            [0] * n_ctrl
+            + [1] * (n_genes * n_cells_per_gene)
+            + [2] * 10
+            + [2] * 10
+        )
+        encoder = {
+            "control": 0,
+            "GENE_A": 1, "GENE_B": 2, "GENE_C": 3, "GENE_D": 4,
+            "GENE_A_GENE_B": 5, "GENE_C_GENE_D": 6,
+        }
+        pert_idx = np.array([encoder[p] for p in pert_labels], dtype=np.int32)
+
+        X = rng.poisson(2.0, (n_total, 10)).astype("float32")
+        adata = anndata.AnnData(
+            X=X,
+            obs={"perturbation": pert_labels, "perturbation_idx": pert_idx, "nperts": nperts_col},
+        )
+        adata.layers["counts"] = X.copy().astype("int32")
+        adata.uns["perturbation_encoder"] = encoder
+        adata.uns["ctrl_label"] = "control"
+        adata.uns["noop_idx"] = 4
+
+        # Synthetic latents (same cell order as adata)
+        Z = rng.normal(size=(n_total, n_latent)).astype("float32")
+
+        cfg = types.SimpleNamespace(
+            pairing=types.SimpleNamespace(
+                method="random",
+                ot_epsilon=0.05, ot_iter=100,
+                val_cell_fraction=0.10,
+                ood_gene_fraction=0.25,
+                combo_held_out_fraction=0.25,
+                min_cells_per_perturbation=5,
+                pair_seed=42,
+            ),
+            paths=types.SimpleNamespace(
+                norman_processed_h5ad=str(tmp_path / "processed.h5ad"),
+                vae_latents_h5ad=str(tmp_path / "latents.h5ad"),
+                pairs_dir=str(tmp_path / "pairs"),
+            ),
+        )
+
+        from src.data.perturbation_pairs import build_pairs
+        paths = build_pairs(cfg, adata=adata, latents=Z, out_dir=tmp_path / "pairs")
+
+        # Verify all five output files exist
+        assert set(paths.keys()) >= {"train", "val", "ood", "combo", "metadata"}
+        for key in ("train", "val", "ood", "combo", "metadata"):
+            assert paths[key].exists(), f"{key} file missing"
+
+        # Contract 2: train / val / ood schema
+        for key in ("train", "val", "ood"):
+            npz = np.load(paths[key])
+            assert set(npz.files) == {"z_ctrl", "gene_idx", "z_pert"}, f"{key}: wrong arrays"
+            assert npz["z_ctrl"].shape[1] == n_latent
+            assert npz["z_pert"].shape[1] == n_latent
+            assert npz["z_ctrl"].shape[0] == npz["z_pert"].shape[0] == npz["gene_idx"].shape[0]
+            assert npz["z_ctrl"].dtype == np.float32
+            assert npz["z_pert"].dtype == np.float32
+            assert npz["gene_idx"].dtype == np.int32
+            # gene_idx must be in range [1, n_single_genes]
+            assert (npz["gene_idx"] >= 1).all() and (npz["gene_idx"] <= 4).all(), \
+                f"{key}: gene_idx out of [1, 4]"
+
+        # Contract 2: combo schema
+        combo = np.load(paths["combo"])
+        assert set(combo.files) == {"z_ctrl", "gene_idx_a", "gene_idx_b", "z_pert_ab"}
+        assert combo["z_ctrl"].shape[1] == n_latent
+        assert combo["z_pert_ab"].shape[1] == n_latent
+
+        # Metadata
+        import json
+        meta = json.loads(paths["metadata"].read_text())
+        assert "pairing_method" in meta
+        assert "held_out_genes" in meta
+        assert meta["n_train"] == np.load(paths["train"])["gene_idx"].shape[0]
+        assert meta["n_val"]   == np.load(paths["val"])["gene_idx"].shape[0]
+        assert meta["n_ood"]   == np.load(paths["ood"])["gene_idx"].shape[0]

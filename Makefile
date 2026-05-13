@@ -7,7 +7,7 @@ DOCKER ?= docker
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup data vae dynamics rl evaluate pipeline test lint format \
+.PHONY: help setup data vae pairs dynamics rl evaluate pipeline test lint format \
         docker-build docker-cpu docker-cuda tensorboard clean nuke notebooks
 
 help:  ## Show this help message.
@@ -39,6 +39,9 @@ CONFIG ?= default
 
 vae:  ## Train scVI VAE.
 	$(PYTHON) scripts/train_vae.py --config-name $(CONFIG)
+
+pairs:  ## Build OT pseudo-pairs (train/val/ood/combo). Run after make vae.
+	$(PYTHON) scripts/build_pairs.py --config-name $(CONFIG)
 
 dynamics:  ## Train residual MLP dynamics model.
 	$(PYTHON) scripts/train_dynamics.py --config-name $(CONFIG)

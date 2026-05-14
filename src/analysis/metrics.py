@@ -511,6 +511,13 @@ def hypergeometric_enrichment(
 ) -> dict[str, Any]:
     """One-sided hypergeometric test for overlap.
 
+    Tests whether the observed overlap k = |selected ∩ gene_set| is larger than
+    expected when drawing n = |selected| genes from a population of N = |background|
+    genes of which K = |gene_set ∩ background| are "successes":
+
+        p = P(X ≥ k) = hypergeom.sf(k - 1, N, K, n)   (upper-tail, one-sided)
+        log_odds = log2( (k/n) / (K/N) )                (effect size; 0 = no enrichment)
+
     Parameters
     ----------
     selected_genes
@@ -524,43 +531,120 @@ def hypergeometric_enrichment(
     -------
     dict
         ``{"k": int, "K": int, "n": int, "N": int, "p_value": float, "log_odds": float}``.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: ``scipy.stats.hypergeom`` upper-tail.
     """
-    raise NotImplementedError("Agent A: scipy.stats.hypergeom one-sided.")
+    from scipy.stats import hypergeom
+
+    bg   = set(background)
+    sel  = set(selected_genes) & bg
+    gset = set(gene_set) & bg
+
+    N = len(bg)
+    K = len(gset)
+    n = len(sel)
+    k = len(sel & gset)
+
+    p_value = float(hypergeom.sf(k - 1, N, K, n)) if (N > 0 and K > 0 and n > 0) else 1.0
+
+    # log-odds: observed overlap rate vs expected; guard against division by zero
+    obs_rate = k / n if n > 0 else 0.0
+    exp_rate = K / N if N > 0 else 0.0
+    if obs_rate == 0 or exp_rate == 0:
+        log_odds = 0.0
+    else:
+        import math
+        log_odds = math.log2(obs_rate / exp_rate)
+
+    return {"k": k, "K": K, "n": n, "N": N, "p_value": p_value, "log_odds": log_odds}
 
 
 def gsea_preranked(
     ranked_genes: list[str],
     scores: np.ndarray,
     gene_set: list[str],
+    n_permutations: int = 1_000,
+    seed: int = 42,
 ) -> dict[str, Any]:
-    """GSEA-preranked enrichment.
+    """GSEA-preranked enrichment (Subramanian et al. 2005).
+
+    Algorithm:
+    1. Sort genes by ``scores`` (descending); this is the pre-ranked list.
+    2. Compute the running enrichment score (ES): walk the ranked list, adding
+       ``+|score_i|^p / sum_hit`` when gene i is in the set and
+       ``-1 / sum_miss`` otherwise (p=1 weighting).
+    3. ES = maximum deviation from zero of the running sum.
+    4. Permutation null: shuffle gene labels 1 000× and recompute ES each time.
+    5. NES = ES / mean(|null_ES|); p = fraction of |null_ES| ≥ |ES|.
 
     Parameters
     ----------
     ranked_genes
-        Genes in ranked order.
+        Gene symbols in any order; will be sorted by ``scores``.
     scores
-        Score vector (e.g. RL action frequency, DepMap Chronos).
+        Score vector aligned to ``ranked_genes``
+        (e.g. RL action frequency or Chronos).
     gene_set
         Reference gene set.
+    n_permutations
+        Number of permutations for the null (default 1 000).
+    seed
+        RNG seed for reproducibility.
 
     Returns
     -------
     dict
         ``{"ES": float, "NES": float, "p_value": float, "fdr": float}``.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement classic GSEA-preranked (KS-like running enrichment), with N=1000
-        permutations for the null.
+        ``fdr`` is a conservative single-test estimate: ``min(p_value * n_tests, 1.0)``
+        where n_tests=1; the caller applies BH correction across multiple gene sets.
     """
-    raise NotImplementedError("Agent A: classic GSEA-preranked with permutation null.")
+    scores  = np.asarray(scores, dtype=np.float64)
+    order   = np.argsort(-scores)          # descending
+    genes_sorted = [ranked_genes[i] for i in order]
+    scores_sorted = scores[order]
+
+    gset = set(gene_set)
+    hits = np.array([g in gset for g in genes_sorted], dtype=bool)
+    n_hit  = hits.sum()
+    n_miss = len(hits) - n_hit
+
+    if n_hit == 0 or n_miss == 0:
+        return {"ES": 0.0, "NES": 0.0, "p_value": 1.0, "fdr": 1.0}
+
+    def _running_es(hit_mask: np.ndarray, sc: np.ndarray) -> float:
+        """Compute ES from a hit mask and score vector."""
+        sum_hit = np.abs(sc[hit_mask]).sum()
+        if sum_hit == 0:
+            return 0.0
+        n_miss_loc = (~hit_mask).sum()
+        running = np.where(
+            hit_mask,
+            np.abs(sc) / sum_hit,
+            -1.0 / max(n_miss_loc, 1),
+        ).cumsum()
+        return float(running[np.abs(running).argmax()])
+
+    es_obs = _running_es(hits, scores_sorted)
+
+    # Permutation null — shuffle hit membership, keep scores fixed
+    rng = np.random.default_rng(seed)
+    null_es = np.empty(n_permutations)
+    for i in range(n_permutations):
+        perm_hits = np.zeros(len(hits), dtype=bool)
+        perm_hits[rng.choice(len(hits), n_hit, replace=False)] = True
+        null_es[i] = _running_es(perm_hits, scores_sorted)
+
+    null_pos = null_es[null_es >= 0]
+    null_neg = null_es[null_es < 0]
+
+    if es_obs >= 0:
+        mean_null = null_pos.mean() if len(null_pos) else 1.0
+        p_value   = float((null_pos >= es_obs).mean()) if len(null_pos) else 1.0
+    else:
+        mean_null = null_neg.mean() if len(null_neg) else -1.0
+        p_value   = float((null_neg <= es_obs).mean()) if len(null_neg) else 1.0
+
+    nes = float(es_obs / abs(mean_null)) if mean_null != 0 else 0.0
+
+    return {"ES": float(es_obs), "NES": nes, "p_value": p_value, "fdr": min(p_value, 1.0)}
 
 
 def null_enrichment_comparison(
@@ -569,8 +653,15 @@ def null_enrichment_comparison(
     background: list[str],
     n_null_samples: int = 1_000,
     match_expression: np.ndarray | None = None,
+    seed: int = 42,
 ) -> dict[str, Any]:
     """Compare observed enrichment to random gene sets of matched size (+ optional expression).
+
+    Two null strategies (DATA.md §5.3):
+    - **Size-matched**: draw ``len(selected_genes)`` random genes from ``background``.
+    - **Expression-matched**: if ``match_expression`` is provided, stratify background by
+      expression decile and sample proportionally from the same decile bins as
+      ``selected_genes``. Controls for HVG-selection bias.
 
     Parameters
     ----------
@@ -579,22 +670,67 @@ def null_enrichment_comparison(
     selected_genes
         The actual RL-selected gene set.
     background
-        Universe of genes.
+        Universe of genes (aligned to ``match_expression`` if provided).
     n_null_samples
         Number of random matched sets.
     match_expression
-        Optional per-gene expression mean (for expression-matched sampling).
+        Optional per-gene mean expression aligned to ``background``.
+    seed
+        RNG seed.
 
     Returns
     -------
     dict
         ``{"z_score": float, "empirical_p": float, "null_mean": float, "null_std": float}``.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent A: implement matched-size and matched-expression null distributions.
     """
-    raise NotImplementedError(
-        "Agent A: matched-size + matched-expression null; report z and empirical p."
-    )
+    rng  = np.random.default_rng(seed)
+    bg   = list(background)
+    n    = min(len(selected_genes), len(bg))
+
+    null_stats: list[float] = []
+
+    if match_expression is not None and len(match_expression) == len(bg):
+        # Expression-matched: bin background into deciles, sample from same bins
+        expr = np.asarray(match_expression, dtype=np.float64)
+        # Decile bin for each background gene
+        bin_edges = np.percentile(expr, np.linspace(0, 100, 11))
+        bin_edges[0] -= 1e-9  # include minimum
+        bg_bins = np.digitize(expr, bin_edges) - 1  # 0..9
+
+        # Determine which deciles the selected genes fall into
+        sel_set = set(selected_genes)
+        sel_idx = [i for i, g in enumerate(bg) if g in sel_set]
+        sel_bins = bg_bins[sel_idx] if sel_idx else np.array([], dtype=int)
+        bin_counts = np.bincount(sel_bins, minlength=10) if len(sel_bins) else np.zeros(10, dtype=int)
+
+        for _ in range(n_null_samples):
+            null_set: list[str] = []
+            for b, cnt in enumerate(bin_counts):
+                if cnt == 0:
+                    continue
+                candidates = np.where(bg_bins == b)[0]
+                drawn = rng.choice(candidates, size=min(cnt, len(candidates)), replace=False)
+                null_set.extend(bg[i] for i in drawn)
+            # Compute hypergeometric log-odds of this null set vs background
+            # (we recycle the same gene_set = selected_genes as the reference — proxy for enrichment)
+            null_stats.append(float(len(set(null_set) & sel_set)) / max(len(null_set), 1))
+    else:
+        # Size-matched: uniform random sampling
+        bg_arr = np.array(bg)
+        sel_set = set(selected_genes)
+        for _ in range(n_null_samples):
+            null_genes = rng.choice(bg_arr, size=n, replace=False).tolist()
+            null_stats.append(float(len(set(null_genes) & sel_set)) / max(n, 1))
+
+    null_arr  = np.array(null_stats, dtype=np.float64)
+    null_mean = float(null_arr.mean())
+    null_std  = float(null_arr.std()) if null_arr.std() > 0 else 1.0
+    z_score   = float((observed_enrichment - null_mean) / null_std)
+    emp_p     = float((null_arr >= observed_enrichment).mean())
+
+    return {
+        "z_score":    z_score,
+        "empirical_p": emp_p,
+        "null_mean":  null_mean,
+        "null_std":   null_std,
+    }

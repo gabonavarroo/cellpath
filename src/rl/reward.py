@@ -6,7 +6,7 @@ Composition::
 
     R(z, a, z', sigma) = − distance(z', z_ref) * λ_dist
                           − λ_sparse · 1[a ≠ NO_OP]
-                          − λ_unc   · ||sigma||
+                          − λ_unc   · mean(exp(log_var))
                           + success_bonus · 1[terminal ∧ ||z' − z_ref|| < ε]
                           − failure_penalty · 1[truncation]
 
@@ -17,9 +17,55 @@ visiting high-uncertainty regions of the dynamics model.
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
+
+
+def distance_to_reference(
+    z: np.ndarray,
+    z_ref: np.ndarray,
+    metric: str = "l2",
+) -> float:
+    """Distance between a latent state and the reference centroid.
+
+    Parameters
+    ----------
+    z
+        Shape ``(n_latent,)``.
+    z_ref
+        Shape ``(n_latent,)``.
+    metric
+        ``"l2"`` (default) or ``"cosine"``.
+
+    Returns
+    -------
+    float
+        Non-negative distance. For cosine, result is in ``[0, 2]``; for L2, ``[0, ∞)``.
+        Zero vectors under cosine return ``1.0`` (maximum uncertainty) rather than NaN.
+
+    Raises
+    ------
+    ValueError
+        If ``metric`` is not ``"l2"`` or ``"cosine"``.
+    """
+    z    = np.asarray(z,    dtype=np.float32)
+    z_ref = np.asarray(z_ref, dtype=np.float32)
+
+    if metric == "l2":
+        return float(np.linalg.norm(z - z_ref))
+
+    if metric == "cosine":
+        norm_z    = float(np.linalg.norm(z))
+        norm_ref  = float(np.linalg.norm(z_ref))
+        if norm_z == 0.0 or norm_ref == 0.0:
+            return 1.0
+        cos_sim = float(np.dot(z, z_ref) / (norm_z * norm_ref))
+        # clamp to [-1, 1] to guard against floating-point drift
+        cos_sim = max(-1.0, min(1.0, cos_sim))
+        return 1.0 - cos_sim
+
+    raise ValueError(
+        f"Unknown distance metric: {metric!r}. Choose 'l2' or 'cosine'."
+    )
 
 
 def compute_reward(
@@ -70,40 +116,26 @@ def compute_reward(
     float
         Scalar reward for this transition.
 
-    Raises
-    ------
-    NotImplementedError
-        Agent B: implement per the formula in the module docstring.
+    Notes
+    -----
+    NO-OP does not pay the sparsity penalty — it is the "stop" action and should never
+    be penalised for frugality. The uncertainty penalty requires ``lambda_unc > 0`` AND
+    a non-None ``log_var``; both conditions must hold.
     """
-    raise NotImplementedError(
-        "Agent B: assemble reward per the docstring composition. "
-        "Note: NO-OP does NOT pay the sparsity penalty (it is the 'stop' action)."
-    )
+    d = distance_to_reference(z_next, z_ref, metric=distance_metric)
+    r = -distance_scale * d
 
+    if action != noop_idx:
+        r -= lambda_sparse
 
-def distance_to_reference(
-    z: np.ndarray,
-    z_ref: np.ndarray,
-    metric: str = "l2",
-) -> float:
-    """Distance between a latent state and the reference centroid.
+    if lambda_unc > 0.0 and log_var is not None:
+        var = np.exp(np.asarray(log_var, dtype=np.float64))
+        r -= lambda_unc * float(np.mean(var))
 
-    Parameters
-    ----------
-    z
-        Shape ``(n_latent,)``.
-    z_ref
-        Shape ``(n_latent,)``.
-    metric
-        ``"l2"`` (default) or ``"cosine"``.
+    if terminated and is_success:
+        r += success_bonus
 
-    Returns
-    -------
-    float
+    if truncated:
+        r -= failure_penalty
 
-    Raises
-    ------
-    NotImplementedError
-        Agent B: implement.
-    """
-    raise NotImplementedError("Agent B: numpy L2 / cosine distance.")
+    return float(r)

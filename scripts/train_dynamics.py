@@ -19,6 +19,7 @@ Workflow
 3.  Log device summary.
 4.  Check for an existing checkpoint at ``cfg.paths.dynamics_model``; if present and
     ``force=false``, skip training (prints a warning if ``n_genes`` changed vs saved config).
+    Training is skipped but the gate (Step 10) still runs if val pairs exist.
 5.  Load Contract 2 pairs from ``cfg.paths.pairs_{train,val,combo}``. If the train file is
     missing, fall back to :func:`src.data.perturbation_pairs.generate_mock_pairs`.
 6.  Infer ``n_genes`` from ``gene_vocab.json`` (real Norman path) or ``metadata.json`` (mock).
@@ -28,13 +29,10 @@ Workflow
     Loss = heteroscedastic NLL + ``lambda_combo`` × composition MSE (when combo pairs exist).
     Early stopping on val NLL; best checkpoint saved atomically.
 9.  Write ``artifacts/dynamics/model.pt`` (best state dict) + ``config.json``.
-
-Phase 2 hook (not yet active)
-------------------------------
-After step 9 the validation gate (:func:`src.analysis.metrics.dynamics_validation_gate`)
-will be called to write ``gate.json``, ``val_metrics.json``, and ``ood_metrics.json``.
-RL training refuses to start without a passing ``gate.json`` (CLAUDE.md sacred rule #9).
-The hook is stubbed out at the bottom of ``main()`` with a clear comment.
+10. Run dynamics validation gate: load best checkpoint, predict on val + OOD splits,
+    call :func:`src.analysis.metrics.dynamics_validation_gate`, write ``gate.json``,
+    ``val_metrics.json``, and ``ood_metrics.json``. Return exit code 1 if the val gate fails.
+    OOD is report-only and does not gate. Missing val pairs are a hard error (exit 1).
 """
 
 from __future__ import annotations
@@ -124,7 +122,7 @@ def _resolve_n_genes(cfg: DictConfig, train_path: Path) -> int:
     """Infer ``n_genes`` with a three-level fallback chain.
 
     1. ``gene_vocab.json`` — written by Agent A after VAE training (real Norman path).
-    2.q ``pairs/metadata.json`` — written by ``generate_mock_pairs`` (mock path).
+    2. ``pairs/metadata.json`` — written by ``generate_mock_pairs`` (mock path).
     3. ``int(train_pairs['gene_idx'].max())`` — last-resort defensive inference.
     """
     vocab_path = Path(cfg.paths.vae_gene_vocab_json)
@@ -161,6 +159,37 @@ def _save_state_dict(model: nn.Module, path: Path) -> None:
     log.debug("Checkpoint saved → %s", path)
 
 
+def _predict_split(
+    model: nn.Module,
+    z_ctrl: torch.Tensor,
+    gene_idx: torch.Tensor,
+    *,
+    device: torch.device,
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run dynamics in eval mode; return (z_pert_pred, log_var) as float32 numpy arrays.
+
+    MPS-safe: each mini-batch is moved to *device* and predictions are moved back to CPU
+    before concatenation. Stays in float32 throughout — MPS does not support float64.
+
+    z_pert_pred = z_ctrl + mu  (residual head, same as z_next from the model).
+    log_var is returned raw; the gate computes exp(log_var) internally.
+    """
+    pred_parts: list[np.ndarray] = []
+    lv_parts:   list[np.ndarray] = []
+    n = z_ctrl.shape[0]
+    model.eval()
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            zc = z_ctrl[start : start + batch_size].to(device)
+            gi = gene_idx[start : start + batch_size].to(device)
+            _, mu, lv = model(zc, gi)
+            # z_pert_pred = z_ctrl + mu (explicit residual; mirrors the math in the gate)
+            pred_parts.append((zc + mu).detach().cpu().numpy().astype(np.float32))
+            lv_parts.append(lv.detach().cpu().numpy().astype(np.float32))
+    return np.concatenate(pred_parts, axis=0), np.concatenate(lv_parts, axis=0)
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -168,7 +197,7 @@ def _save_state_dict(model: nn.Module, path: Path) -> None:
 
 @hydra.main(version_base=None, config_path="../config", config_name="default")
 def main(cfg: DictConfig) -> int:
-    """Hydra-driven main. See module docstring for the 9-step workflow."""
+    """Hydra-driven main. See module docstring for the 10-step workflow."""
     # Deferred src.* imports so Hydra config composition never touches the model.
     from src.data.perturbation_pairs import generate_mock_pairs
     from src.models.dynamics import (
@@ -250,12 +279,13 @@ def main(cfg: DictConfig) -> int:
     log.info("n_latent=%d (verified against cfg.vae.n_latent)", n_latent)
 
     # ------------------------------------------------------------------
-    # Checkpoint skip — reuse existing model.pt unless force=true
+    # Checkpoint check — skip retraining if a compatible model.pt exists
     # ------------------------------------------------------------------
     dynamics_dir = Path(cfg.paths.dynamics_dir)
     dynamics_dir.mkdir(parents=True, exist_ok=True)
     model_path   = Path(cfg.paths.dynamics_model)
 
+    skip_training = False
     if model_path.exists() and not cfg.get("force", False):
         saved_cfg_path = Path(cfg.paths.dynamics_config)
         mismatches: list[str] = []
@@ -285,26 +315,26 @@ def main(cfg: DictConfig) -> int:
             )
         log.info(
             "Checkpoint found at %s — config matches, skipping training. "
-            "Pass +force=true to retrain.",
+            "Pass +force=true to retrain. Proceeding to validation gate (Step 10).",
             model_path,
         )
-        return 0
+        skip_training = True
 
     # ------------------------------------------------------------------
-    # Step 7 — build model
+    # Step 7 — build model (always, whether training or loading checkpoint)
     # ------------------------------------------------------------------
     model = PerturbationDynamicsModel(
-        n_latent       = n_latent,
-        n_genes        = n_genes,
-        d_emb          = int(cfg.dynamics.d_emb),
-        n_hidden       = int(cfg.dynamics.n_hidden),
-        n_layers       = int(cfg.dynamics.n_layers),
-        dropout        = float(cfg.dynamics.dropout),
-        activation     = str(cfg.dynamics.activation),
-        log_var_min    = float(cfg.dynamics.log_var_min),
-        log_var_max    = float(cfg.dynamics.log_var_max),
+        n_latent          = n_latent,
+        n_genes           = n_genes,
+        d_emb             = int(cfg.dynamics.d_emb),
+        n_hidden          = int(cfg.dynamics.n_hidden),
+        n_layers          = int(cfg.dynamics.n_layers),
+        dropout           = float(cfg.dynamics.dropout),
+        activation        = str(cfg.dynamics.activation),
+        log_var_min       = float(cfg.dynamics.log_var_min),
+        log_var_max       = float(cfg.dynamics.log_var_max),
         log_var_init_bias = float(cfg.dynamics.log_var_init_bias),
-        use_layernorm  = bool(cfg.dynamics.use_layernorm),
+        use_layernorm     = bool(cfg.dynamics.use_layernorm),
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -315,223 +345,351 @@ def main(cfg: DictConfig) -> int:
     )
 
     # ------------------------------------------------------------------
-    # Step 8a — DataLoaders
+    # Steps 8–9 — train + write config (skipped when checkpoint reused)
     # ------------------------------------------------------------------
-    pin_memory = (device.type == "cuda")
-    train_loader, val_loader, combo_loader = _build_loaders(
-        train_path  = train_path,
-        val_path    = val_path,
-        combo_path  = combo_path,
-        batch_size  = int(cfg.dynamics.batch_size),
-        num_workers = int(cfg.dynamics.num_workers),
-        pin_memory  = pin_memory,
-    )
-    log.info(
-        "DataLoaders ready | train=%d batches | val=%d batches | combo=%s",
-        len(train_loader),
-        len(val_loader),
-        f"{len(combo_loader)} batches" if combo_loader is not None else "none",
-    )
-
-    # ------------------------------------------------------------------
-    # Step 8b — optimizer + LR scheduler
-    # ------------------------------------------------------------------
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr           = float(cfg.dynamics.lr),
-        weight_decay = float(cfg.dynamics.weight_decay),
-    )
-
-    scheduler_name = str(cfg.dynamics.scheduler).lower()
-    if scheduler_name == "cosine":
-        scheduler: torch.optim.lr_scheduler.LRScheduler | None = (
-            torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max   = int(cfg.dynamics.max_epochs),
-                eta_min = float(cfg.dynamics.lr) * 1e-2,
-            )
+    if not skip_training:
+        # ---- 8a: DataLoaders ----
+        pin_memory = (device.type == "cuda")
+        train_loader, val_loader, combo_loader = _build_loaders(
+            train_path  = train_path,
+            val_path    = val_path,
+            combo_path  = combo_path,
+            batch_size  = int(cfg.dynamics.batch_size),
+            num_workers = int(cfg.dynamics.num_workers),
+            pin_memory  = pin_memory,
         )
         log.info(
-            "CosineAnnealingLR: %.2e → %.2e over %d epochs",
-            float(cfg.dynamics.lr),
-            float(cfg.dynamics.lr) * 1e-2,
-            int(cfg.dynamics.max_epochs),
+            "DataLoaders ready | train=%d batches | val=%d batches | combo=%s",
+            len(train_loader),
+            len(val_loader),
+            f"{len(combo_loader)} batches" if combo_loader is not None else "none",
         )
-    else:
-        scheduler = None
 
-    # ------------------------------------------------------------------
-    # Step 8c — training loop
-    # ------------------------------------------------------------------
-    lambda_combo      = float(cfg.dynamics.lambda_combo)
-    lambda_lv_reg     = float(cfg.dynamics.lambda_log_var_reg)
-    max_epochs        = int(cfg.dynamics.max_epochs)
-    patience          = int(cfg.dynamics.early_stop_patience)
+        # ---- 8b: optimizer + LR scheduler ----
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr           = float(cfg.dynamics.lr),
+            weight_decay = float(cfg.dynamics.weight_decay),
+        )
 
-    combo_iter        = _iter_infinite(combo_loader) if combo_loader is not None else None
-    best_val_nll      = float("inf")
-    best_epoch        = 0
-    patience_counter  = 0
-    epochs_run        = 0
-    final_val_nll     = float("inf")
+        scheduler_name = str(cfg.dynamics.scheduler).lower()
+        if scheduler_name == "cosine":
+            scheduler: torch.optim.lr_scheduler.LRScheduler | None = (
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max   = int(cfg.dynamics.max_epochs),
+                    eta_min = float(cfg.dynamics.lr) * 1e-2,
+                )
+            )
+            log.info(
+                "CosineAnnealingLR: %.2e → %.2e over %d epochs",
+                float(cfg.dynamics.lr),
+                float(cfg.dynamics.lr) * 1e-2,
+                int(cfg.dynamics.max_epochs),
+            )
+        else:
+            scheduler = None
 
-    log.info(
-        "Training start | max_epochs=%d | patience=%d | "
-        "lambda_combo=%.3f | lambda_lv_reg=%.4f",
-        max_epochs, patience, lambda_combo, lambda_lv_reg,
-    )
+        # ---- 8c: training loop ----
+        lambda_combo      = float(cfg.dynamics.lambda_combo)
+        lambda_lv_reg     = float(cfg.dynamics.lambda_log_var_reg)
+        max_epochs        = int(cfg.dynamics.max_epochs)
+        patience          = int(cfg.dynamics.early_stop_patience)
 
-    for epoch in range(max_epochs):
-        # ---- train ----
-        model.train()
-        epoch_nll   = 0.0
-        epoch_combo = 0.0
-        n_train     = 0
+        combo_iter        = _iter_infinite(combo_loader) if combo_loader is not None else None
+        best_val_nll      = float("inf")
+        best_epoch        = 0
+        patience_counter  = 0
+        epochs_run        = 0
+        final_val_nll     = float("inf")
 
-        for z_c, g, z_p in train_loader:
-            z_c = z_c.to(device)
-            g   = g.to(device)
-            z_p = z_p.to(device)
+        log.info(
+            "Training start | max_epochs=%d | patience=%d | "
+            "lambda_combo=%.3f | lambda_lv_reg=%.4f",
+            max_epochs, patience, lambda_combo, lambda_lv_reg,
+        )
 
-            _, mu, lv        = model(z_c, g)
-            target_delta     = z_p - z_c
-            loss_nll         = heteroscedastic_nll(mu, lv, target_delta, log_var_reg=lambda_lv_reg)
-            loss             = loss_nll
-            batch_combo_loss = 0.0
+        for epoch in range(max_epochs):
+            # ---- train ----
+            model.train()
+            epoch_nll   = 0.0
+            epoch_combo = 0.0
+            n_train     = 0
 
-            if combo_iter is not None and lambda_combo > 0.0:
-                z_cc, g_a, g_b, z_ab = next(combo_iter)
-                z_cc = z_cc.to(device)
-                g_a  = g_a.to(device)
-                g_b  = g_b.to(device)
-                z_ab = z_ab.to(device)
-                loss_c           = composition_loss(model, z_cc, g_a, g_b, z_ab)
-                loss             = loss + lambda_combo * loss_c
-                batch_combo_loss = loss_c.item()
-
-            optimizer.zero_grad()
-            loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-
-            epoch_nll   += loss_nll.item()
-            epoch_combo += batch_combo_loss
-            n_train     += 1
-
-        if scheduler is not None:
-            scheduler.step()
-
-        # ---- validate ----
-        model.eval()
-        val_nll_sum = 0.0
-        n_val       = 0
-        with torch.no_grad():
-            for z_c, g, z_p in val_loader:
+            for z_c, g, z_p in train_loader:
                 z_c = z_c.to(device)
                 g   = g.to(device)
                 z_p = z_p.to(device)
-                _, mu_v, lv_v = model(z_c, g)
-                val_nll_sum  += heteroscedastic_nll(
-                    mu_v, lv_v, z_p - z_c, log_var_reg=0.0
-                ).item()
-                n_val += 1
 
-        avg_nll   = epoch_nll   / max(n_train, 1)
-        avg_combo = epoch_combo / max(n_train, 1)
-        avg_val   = val_nll_sum / max(n_val,   1)
-        avg_total = avg_nll + lambda_combo * avg_combo
-        epochs_run    = epoch + 1
-        final_val_nll = avg_val
+                _, mu, lv        = model(z_c, g)
+                target_delta     = z_p - z_c
+                loss_nll         = heteroscedastic_nll(mu, lv, target_delta, log_var_reg=lambda_lv_reg)
+                loss             = loss_nll
+                batch_combo_loss = 0.0
+
+                if combo_iter is not None and lambda_combo > 0.0:
+                    z_cc, g_a, g_b, z_ab = next(combo_iter)
+                    z_cc = z_cc.to(device)
+                    g_a  = g_a.to(device)
+                    g_b  = g_b.to(device)
+                    z_ab = z_ab.to(device)
+                    loss_c           = composition_loss(model, z_cc, g_a, g_b, z_ab)
+                    loss             = loss + lambda_combo * loss_c
+                    batch_combo_loss = loss_c.item()
+
+                optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+
+                epoch_nll   += loss_nll.item()
+                epoch_combo += batch_combo_loss
+                n_train     += 1
+
+            if scheduler is not None:
+                scheduler.step()
+
+            # ---- validate ----
+            model.eval()
+            val_nll_sum = 0.0
+            n_val       = 0
+            with torch.no_grad():
+                for z_c, g, z_p in val_loader:
+                    z_c = z_c.to(device)
+                    g   = g.to(device)
+                    z_p = z_p.to(device)
+                    _, mu_v, lv_v = model(z_c, g)
+                    val_nll_sum  += heteroscedastic_nll(
+                        mu_v, lv_v, z_p - z_c, log_var_reg=0.0
+                    ).item()
+                    n_val += 1
+
+            avg_nll   = epoch_nll   / max(n_train, 1)
+            avg_combo = epoch_combo / max(n_train, 1)
+            avg_val   = val_nll_sum / max(n_val,   1)
+            avg_total = avg_nll + lambda_combo * avg_combo
+            epochs_run    = epoch + 1
+            final_val_nll = avg_val
+
+            log.info(
+                "epoch %03d/%03d | loss=%.4f  nll=%.4f  combo=%.4f | "
+                "val_nll=%.4f  best=%.4f | lr=%.2e",
+                epochs_run, max_epochs,
+                avg_total, avg_nll, avg_combo,
+                avg_val, best_val_nll,
+                optimizer.param_groups[0]["lr"],
+            )
+
+            if avg_val < best_val_nll:
+                best_val_nll     = avg_val
+                best_epoch       = epochs_run
+                patience_counter = 0
+                _save_state_dict(model, model_path)
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    log.info(
+                        "Early stopping at epoch %d (no val improvement for %d epochs). "
+                        "Best epoch=%d  val_nll=%.4f.",
+                        epochs_run, patience, best_epoch, best_val_nll,
+                    )
+                    break
+
+        # Safety fallback: if val_nll never improved (e.g. NaN on first epoch)
+        if not model_path.exists():
+            log.warning("No best checkpoint was written; saving current model state.")
+            _save_state_dict(model, model_path)
 
         log.info(
-            "epoch %03d/%03d | loss=%.4f  nll=%.4f  combo=%.4f | "
-            "val_nll=%.4f  best=%.4f | lr=%.2e",
-            epochs_run, max_epochs,
-            avg_total, avg_nll, avg_combo,
-            avg_val, best_val_nll,
-            optimizer.param_groups[0]["lr"],
+            "Training complete | epochs_run=%d | best_epoch=%d | best_val_nll=%.4f",
+            epochs_run, best_epoch, best_val_nll,
         )
 
-        if avg_val < best_val_nll:
-            best_val_nll     = avg_val
-            best_epoch       = epochs_run
-            patience_counter = 0
-            _save_state_dict(model, model_path)
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                log.info(
-                    "Early stopping at epoch %d (no val improvement for %d epochs). "
-                    "Best epoch=%d  val_nll=%.4f.",
-                    epochs_run, patience, best_epoch, best_val_nll,
-                )
-                break
+        # ---- Step 9: write config.json ----
+        meta_path  = Path(cfg.paths.pairs_metadata)
+        trained_on = "unknown"
+        if meta_path.exists():
+            meta       = json.loads(meta_path.read_text())
+            trained_on = "mock" if meta.get("pairing_method") == "mock" else "real"
 
-    # Safety fallback: if val_nll never improved (e.g. NaN on first epoch)
-    if not model_path.exists():
-        log.warning("No best checkpoint was written; saving current model state.")
-        _save_state_dict(model, model_path)
+        config_record: dict = {
+            "n_latent"          : n_latent,
+            "n_genes"           : n_genes,
+            "d_emb"             : int(cfg.dynamics.d_emb),
+            "n_hidden"          : int(cfg.dynamics.n_hidden),
+            "n_layers"          : int(cfg.dynamics.n_layers),
+            "dropout"           : float(cfg.dynamics.dropout),
+            "activation"        : str(cfg.dynamics.activation),
+            "log_var_min"       : float(cfg.dynamics.log_var_min),
+            "log_var_max"       : float(cfg.dynamics.log_var_max),
+            "use_layernorm"     : bool(cfg.dynamics.use_layernorm),
+            "trained_on"        : trained_on,
+            "epochs_run"        : epochs_run,
+            "best_epoch"        : best_epoch,
+            "best_val_nll"      : best_val_nll,
+            "final_val_nll"     : final_val_nll,
+            "lambda_combo"      : lambda_combo,
+            "lambda_log_var_reg": lambda_lv_reg,
+            "seed"              : int(cfg.seed),
+        }
+        config_path = Path(cfg.paths.dynamics_config)
+        config_path.write_text(json.dumps(config_record, indent=2))
+        log.info("config.json written → %s", config_path)
 
-    log.info(
-        "Training complete | epochs_run=%d | best_epoch=%d | best_val_nll=%.4f",
-        epochs_run, best_epoch, best_val_nll,
+    else:
+        # Checkpoint reused: write a minimal config.json only if one doesn't exist yet.
+        config_path = Path(cfg.paths.dynamics_config)
+        if not config_path.exists():
+            meta_path  = Path(cfg.paths.pairs_metadata)
+            trained_on = "unknown"
+            if meta_path.exists():
+                meta       = json.loads(meta_path.read_text())
+                trained_on = "mock" if meta.get("pairing_method") == "mock" else "real"
+            minimal: dict = {
+                "n_latent"         : n_latent,
+                "n_genes"          : n_genes,
+                "d_emb"            : int(cfg.dynamics.d_emb),
+                "n_hidden"         : int(cfg.dynamics.n_hidden),
+                "n_layers"         : int(cfg.dynamics.n_layers),
+                "dropout"          : float(cfg.dynamics.dropout),
+                "activation"       : str(cfg.dynamics.activation),
+                "log_var_min"      : float(cfg.dynamics.log_var_min),
+                "log_var_max"      : float(cfg.dynamics.log_var_max),
+                "use_layernorm"    : bool(cfg.dynamics.use_layernorm),
+                "trained_on"       : trained_on,
+                "epochs_run"       : 0,
+                "best_epoch"       : 0,
+                "best_val_nll"     : None,
+                "final_val_nll"    : None,
+                "checkpoint_reused": True,
+                "seed"             : int(cfg.seed),
+            }
+            config_path.write_text(json.dumps(minimal, indent=2))
+            log.info("config.json (checkpoint-reuse stub) written → %s", config_path)
+
+    # ------------------------------------------------------------------
+    # Step 10 — Phase 2 validation gate (always runs)
+    # ------------------------------------------------------------------
+    from src.analysis.metrics import dynamics_validation_gate
+
+    val_path_p = Path(cfg.paths.pairs_val)
+    if not val_path_p.exists():
+        log.error(
+            "Validation pairs not found at %s — cannot run the dynamics validation gate. "
+            "Run `make pairs` or `generate_mock_pairs` so val_pairs.npz exists. "
+            "RL training is blocked until gate.json is written with passed=true.",
+            val_path_p,
+        )
+        return 1
+
+    # Reload best checkpoint into the already-built model.
+    # map_location="cpu" avoids the MPS deserialiser path; load_state_dict then copies
+    # tensors into the model already resident on `device`.
+    log.info("Loading best checkpoint from %s for gate evaluation.", model_path)
+    state = torch.load(model_path, map_location="cpu")
+    model.load_state_dict(state)
+    model.to(device)
+    model.eval()
+
+    # Load pair splits for baseline fitting and prediction.
+    train_z_ctrl, train_g_idx, train_z_pert = _npz_to_tensors(
+        train_path, ["z_ctrl", "gene_idx", "z_pert"]
+    )
+    val_z_ctrl, val_g_idx, val_z_pert = _npz_to_tensors(
+        val_path_p, ["z_ctrl", "gene_idx", "z_pert"]
     )
 
-    # ------------------------------------------------------------------
-    # Step 9 — write config.json
-    # ------------------------------------------------------------------
-    meta_path  = Path(cfg.paths.pairs_metadata)
-    trained_on = "unknown"
-    if meta_path.exists():
-        meta       = json.loads(meta_path.read_text())
-        trained_on = "mock" if meta.get("pairing_method") == "mock" else "real"
+    batch_size_gate = int(cfg.dynamics.batch_size)
+    val_z_pert_pred, val_log_var = _predict_split(
+        model, val_z_ctrl, val_g_idx, device=device, batch_size=batch_size_gate,
+    )
 
-    config_record: dict = {
-        "n_latent"         : n_latent,
-        "n_genes"          : n_genes,
-        "d_emb"            : int(cfg.dynamics.d_emb),
-        "n_hidden"         : int(cfg.dynamics.n_hidden),
-        "n_layers"         : int(cfg.dynamics.n_layers),
-        "dropout"          : float(cfg.dynamics.dropout),
-        "activation"       : str(cfg.dynamics.activation),
-        "log_var_min"      : float(cfg.dynamics.log_var_min),
-        "log_var_max"      : float(cfg.dynamics.log_var_max),
-        "use_layernorm"    : bool(cfg.dynamics.use_layernorm),
-        "trained_on"       : trained_on,
-        "epochs_run"       : epochs_run,
-        "best_epoch"       : best_epoch,
-        "best_val_nll"     : best_val_nll,
-        "final_val_nll"    : final_val_nll,
-        "lambda_combo"     : lambda_combo,
-        "lambda_log_var_reg": lambda_lv_reg,
-        "seed"             : int(cfg.seed),
+    baselines_train_data = {
+        "z_ctrl":   train_z_ctrl.numpy(),
+        "gene_idx": train_g_idx.numpy(),
+        "z_pert":   train_z_pert.numpy(),
     }
-    config_path = Path(cfg.paths.dynamics_config)
-    config_path.write_text(json.dumps(config_record, indent=2))
-    log.info("config.json written → %s", config_path)
 
-    # ------------------------------------------------------------------
-    # Phase 2 hook — validation gate (not yet implemented)
-    # ------------------------------------------------------------------
-    # Uncomment and implement when Phase 2 lands (see PHASES.md Phase 2 / AGENTS.md §2):
-    #
-    # from src.analysis.metrics import dynamics_validation_gate
-    # ood_path = Path(cfg.paths.pairs_ood)
-    # gate = dynamics_validation_gate(
-    #     z_ctrl          = <val_z_ctrl array>,
-    #     gene_idx        = <val_gene_idx array>,
-    #     z_pert_true     = <val_z_pert array>,
-    #     z_pert_pred_mlp = <model predictions array>,
-    #     log_var_pred    = <model log_var array>,
-    #     cfg_gate        = cfg.dynamics.gate,
-    # )
-    # gate_path = Path(cfg.paths.dynamics_gate)
-    # gate_path.write_text(json.dumps(gate, indent=2))
-    # log.info("gate.json written (passed=%s) → %s", gate["passed"], gate_path)
-    # if not gate["passed"]:
-    #     log.error("Dynamics validation gate FAILED. RL training is blocked until it passes.")
-    #     return 1
+    log.info("Running validation gate on %d val samples ...", len(val_z_ctrl))
+    val_out = dynamics_validation_gate(
+        z_ctrl          = val_z_ctrl.numpy(),
+        gene_idx        = val_g_idx.numpy(),
+        z_pert_true     = val_z_pert.numpy(),
+        z_pert_pred_mlp = val_z_pert_pred,
+        log_var_pred    = val_log_var,
+        cfg_gate        = cfg.dynamics.gate,
+        baselines_train_data = baselines_train_data,
+    )
+    log.info(
+        "Val gate: passed=%s | R²=%.4f | Pearson=%.4f | Spearman=%.4f",
+        val_out["passed"],
+        val_out["primary"]["r2"],
+        val_out["primary"]["pearson_r"],
+        val_out["uncertainty_calibration"]["spearman"],
+    )
 
+    # OOD split — report-only, does not affect gate.json["passed"]
+    ood_path  = Path(cfg.paths.pairs_ood)
+    ood_out: dict | None = None
+    if ood_path.exists():
+        ood_z_ctrl, ood_g_idx, ood_z_pert = _npz_to_tensors(
+            ood_path, ["z_ctrl", "gene_idx", "z_pert"]
+        )
+        if len(ood_z_ctrl) > 0:
+            log.info("Running OOD report on %d OOD samples ...", len(ood_z_ctrl))
+            ood_z_pert_pred, ood_log_var = _predict_split(
+                model, ood_z_ctrl, ood_g_idx, device=device, batch_size=batch_size_gate,
+            )
+            ood_out = dynamics_validation_gate(
+                z_ctrl          = ood_z_ctrl.numpy(),
+                gene_idx        = ood_g_idx.numpy(),
+                z_pert_true     = ood_z_pert.numpy(),
+                z_pert_pred_mlp = ood_z_pert_pred,
+                log_var_pred    = ood_log_var,
+                cfg_gate        = cfg.dynamics.gate,
+                baselines_train_data = baselines_train_data,
+            )
+            log.info(
+                "OOD report (non-gating): R²=%.4f | Pearson=%.4f | Spearman=%.4f",
+                ood_out["primary"]["r2"],
+                ood_out["primary"]["pearson_r"],
+                ood_out["uncertainty_calibration"]["spearman"],
+            )
+    else:
+        log.info(
+            "OOD pairs not found at %s — skipping OOD report (non-gating). "
+            "This is expected when running on mock pairs.",
+            ood_path,
+        )
+
+    # Write gate.json — only val outcome contributes to 'passed'
+    gate_record: dict = {
+        "passed"                  : val_out["passed"],
+        "primary"                 : val_out["primary"],
+        "ood"                     : ood_out["primary"] if ood_out is not None else None,
+        "uncertainty_calibration" : val_out["uncertainty_calibration"],
+        "uncertainty_calibration_ood": (
+            ood_out["uncertainty_calibration"] if ood_out is not None else None
+        ),
+        "margins_used"            : val_out["margins_used"],
+    }
+    gate_path = Path(cfg.paths.dynamics_gate)
+    gate_path.write_text(json.dumps(gate_record, indent=2))
+    Path(cfg.paths.dynamics_val_metrics).write_text(json.dumps(val_out, indent=2))
+    if ood_out is not None:
+        Path(cfg.paths.dynamics_ood_metrics).write_text(json.dumps(ood_out, indent=2))
+
+    log.info("gate.json written (passed=%s) → %s", gate_record["passed"], gate_path)
+
+    if not val_out["passed"]:
+        log.error(
+            "Dynamics validation gate FAILED on the val split. "
+            "RL training is blocked until the gate passes. "
+            "Check margin_checks in val_metrics.json for which baselines the MLP lost to."
+        )
+        return 1
+
+    log.info("Dynamics validation gate PASSED. RL training is unblocked.")
     return 0
 
 

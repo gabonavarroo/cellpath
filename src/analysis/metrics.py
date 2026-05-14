@@ -65,6 +65,66 @@ def _safe_float(x: Any) -> float:
     return v
 
 
+def _fit_ridge_baseline(
+    z_ctrl_tr: np.ndarray,
+    gene_idx_tr: np.ndarray,
+    delta_tr: np.ndarray,
+    n_genes: int,
+    *,
+    alpha: float = 1.0,
+    random_state: int = 42,
+) -> Any:
+    """Fit ``Ridge`` on ``[z_ctrl, one_hot(gene_idx, n_genes)] → delta``.
+
+    Single source of truth for the linear-ridge baseline used by the dynamics
+    validation gate AND the gate-diagnostics report. The ``n_genes`` argument
+    is the one-hot width at fit time; the same width MUST be used at predict
+    time so feature dimensions line up.
+
+    Parameters
+    ----------
+    z_ctrl_tr, delta_tr
+        Each ``(M, n_latent)``. ``delta_tr = z_pert_tr - z_ctrl_tr``.
+    gene_idx_tr
+        Shape ``(M,)`` int, 1-indexed per Contract 2.
+    n_genes
+        One-hot width. Typically ``int(gene_idx_tr.max())``.
+    alpha
+        L2 regularization strength (default 1.0; matches gate baseline).
+    random_state
+        Forwarded to sklearn for reproducibility.
+
+    Returns
+    -------
+    sklearn.linear_model.Ridge
+        Fitted estimator with ``predict`` that returns float64.
+    """
+    from sklearn.linear_model import Ridge
+
+    X_tr = np.concatenate(
+        [_as_float32(z_ctrl_tr), _one_hot_genes(gene_idx_tr, n_genes)], axis=1
+    )
+    ridge = Ridge(alpha=alpha, random_state=random_state)
+    ridge.fit(X_tr, _as_float32(delta_tr))
+    return ridge
+
+
+def _predict_ridge_baseline(
+    ridge: Any,
+    z_ctrl: np.ndarray,
+    gene_idx: np.ndarray,
+    n_genes: int,
+) -> np.ndarray:
+    """Predict Δz from the fitted ridge baseline; return float32.
+
+    ``n_genes`` must equal the value passed to :func:`_fit_ridge_baseline`.
+    """
+    X = np.concatenate(
+        [_as_float32(z_ctrl), _one_hot_genes(gene_idx, n_genes)], axis=1
+    )
+    return _as_float32(ridge.predict(X))
+
+
 # ---------------------------------------------------------------------------
 # Public metrics
 # ---------------------------------------------------------------------------
@@ -219,7 +279,6 @@ def dynamics_validation_gate(
     ValueError
         If ``baselines_train_data`` is None or missing required keys.
     """
-    from sklearn.linear_model import Ridge
     from sklearn.neighbors import NearestNeighbors
 
     if baselines_train_data is None:
@@ -270,12 +329,10 @@ def dynamics_validation_gate(
         [mean_by_gene.get(int(g), global_mean) for g in gene_idx_v]
     ).astype(np.float32)
 
-    # d. linear ridge on [z_ctrl, one_hot(gene_idx)] → delta
-    X_tr  = np.concatenate([z_ctrl_tr, _one_hot_genes(g_idx_tr,   n_genes_tr)], axis=1)
-    X_val = np.concatenate([z_ctrl_v,  _one_hot_genes(gene_idx_v, n_genes_tr)], axis=1)
-    ridge = Ridge(alpha=1.0, random_state=42)
-    ridge.fit(X_tr, delta_tr)
-    delta_ridge = _as_float32(ridge.predict(X_val))
+    # d. linear ridge on [z_ctrl, one_hot(gene_idx)] → delta (shared helper to keep
+    #    the gate baseline and gate_diagnostics consistent)
+    ridge = _fit_ridge_baseline(z_ctrl_tr, g_idx_tr, delta_tr, n_genes_tr)
+    delta_ridge = _predict_ridge_baseline(ridge, z_ctrl_v, gene_idx_v, n_genes_tr)
 
     # e. kNN (k=5) on train z_ctrl; average k nearest delta_tr (geometry-only baseline)
     k = min(5, len(z_ctrl_tr))
@@ -352,6 +409,190 @@ def dynamics_validation_gate(
         },
         "uncertainty_calibration": {"spearman": float(calib_rho), "pass": calib_pass},
         "margins_used": margins_used,
+    }
+
+
+def gate_diagnostics(
+    z_ctrl_train: np.ndarray,
+    gene_idx_train: np.ndarray,
+    z_pert_train: np.ndarray,
+    z_ctrl_val: np.ndarray,
+    gene_idx_val: np.ndarray,
+    z_pert_val: np.ndarray,
+    z_pert_pred_mlp_val: np.ndarray,
+    z_ctrl_ood: np.ndarray | None = None,
+    gene_idx_ood: np.ndarray | None = None,
+    z_pert_ood: np.ndarray | None = None,
+    z_pert_pred_mlp_ood: np.ndarray | None = None,
+    n_worst_dims: int = 8,
+    per_gene_min_for_pearson: int = 30,
+) -> dict[str, Any]:
+    """Per-dim and per-gene diagnostic breakdown of MLP vs ridge.
+
+    Uses :func:`_fit_ridge_baseline` + :func:`_predict_ridge_baseline` (the same helpers
+    consumed by :func:`dynamics_validation_gate`) so the ridge baseline is bit-identical
+    between gate.json and gate_diagnostics.json — there is no second ridge implementation
+    anywhere.
+
+    The output is intended for an engineer reading ``artifacts/dynamics/gate_diagnostics.json``
+    while debugging a failed primary gate. Three lenses:
+
+    1. **Overall:** MLP vs ridge R² and Pearson on val (and OOD if present), plus the
+       MLP-minus-ridge Pearson which is exactly the quantity the primary gate compares
+       against ``margin_vs_linear_ridge_pearson``.
+    2. **Per-dim:** the same comparison projected onto each of the ``n_latent`` axes;
+       useful for spotting "the MLP wins 30 dims and loses 2 catastrophically".
+    3. **Per-gene (val only):** R² of MLP and ridge per gene_idx, with sample count.
+       Pearson is reported only when the per-gene cell count ≥ ``per_gene_min_for_pearson``
+       (default 30); below that, per-dim Pearson is too noisy and would mislead.
+
+    Parameters
+    ----------
+    z_ctrl_train, gene_idx_train, z_pert_train
+        Training triples used to fit the ridge baseline. Shapes
+        ``(M, n_latent)`` / ``(M,)`` / ``(M, n_latent)``.
+    z_ctrl_val, gene_idx_val, z_pert_val, z_pert_pred_mlp_val
+        Validation triples + the MLP's predicted ``z_pert`` (NOT Δz). Shapes
+        ``(N_val, n_latent)`` for the latent arrays.
+    z_ctrl_ood, gene_idx_ood, z_pert_ood, z_pert_pred_mlp_ood
+        Optional OOD triples + predictions. If any is ``None``, the ``"ood"``
+        sections of the returned dict are ``None`` and the function still succeeds.
+    n_worst_dims
+        How many of the worst (MLP minus ridge) per-dim Pearson values to expose
+        in the ``"worst_dims"`` block.
+    per_gene_min_for_pearson
+        Threshold below which per-gene Pearson is reported as ``None``.
+
+    Returns
+    -------
+    dict
+        JSON-safe dict with sections ``overall``, ``per_dim``, ``worst_dims``,
+        ``per_gene_val``. See the source for the exact schema.
+    """
+    z_ctrl_tr  = _as_float32(z_ctrl_train)
+    g_idx_tr   = np.asarray(gene_idx_train, dtype=np.int32)
+    z_pert_tr  = _as_float32(z_pert_train)
+    delta_tr   = z_pert_tr - z_ctrl_tr
+    n_genes_tr = int(g_idx_tr.max()) if len(g_idx_tr) else 0
+
+    z_ctrl_v       = _as_float32(z_ctrl_val)
+    g_idx_v        = np.asarray(gene_idx_val, dtype=np.int32)
+    z_pert_v       = _as_float32(z_pert_val)
+    z_pert_pred_v  = _as_float32(z_pert_pred_mlp_val)
+    delta_true_v   = z_pert_v - z_ctrl_v
+    delta_mlp_v    = z_pert_pred_v - z_ctrl_v
+
+    ridge = _fit_ridge_baseline(z_ctrl_tr, g_idx_tr, delta_tr, n_genes_tr)
+    delta_ridge_v = _predict_ridge_baseline(ridge, z_ctrl_v, g_idx_v, n_genes_tr)
+
+    # --- per-dim Pearson on val (already vectorised) ---
+    per_dim_mlp_v   = pearson_r_per_dim(delta_true_v, delta_mlp_v)
+    per_dim_ridge_v = pearson_r_per_dim(delta_true_v, delta_ridge_v)
+    per_dim_diff_v  = per_dim_mlp_v - per_dim_ridge_v
+
+    overall_val = {
+        "mlp_r2":                  float(predictive_r2(delta_true_v, delta_mlp_v)),
+        "mlp_pearson":             _safe_float(np.nanmean(per_dim_mlp_v)),
+        "ridge_r2":                float(predictive_r2(delta_true_v, delta_ridge_v)),
+        "ridge_pearson":           _safe_float(np.nanmean(per_dim_ridge_v)),
+        "mlp_minus_ridge_pearson": _safe_float(np.nanmean(per_dim_diff_v)),
+    }
+    per_dim_val = {
+        "mlp_pearson":     [float(x) for x in per_dim_mlp_v],
+        "ridge_pearson":   [float(x) for x in per_dim_ridge_v],
+        "mlp_minus_ridge": [float(x) for x in per_dim_diff_v],
+    }
+
+    # --- worst dims (val) ---
+    n_dim = int(per_dim_diff_v.shape[0])
+    k_worst = max(0, min(int(n_worst_dims), n_dim))
+    order_worst = np.argsort(per_dim_diff_v)[:k_worst]  # most-negative diff first
+    worst_dims_val = [
+        {
+            "dim":   int(d),
+            "mlp":   float(per_dim_mlp_v[d]),
+            "ridge": float(per_dim_ridge_v[d]),
+            "diff":  float(per_dim_diff_v[d]),
+        }
+        for d in order_worst
+    ]
+
+    # --- per-gene summary (val) ---
+    per_gene_val: list[dict[str, Any]] = []
+    for g in np.unique(g_idx_v):
+        mask = g_idx_v == g
+        n_g = int(mask.sum())
+        dt = delta_true_v[mask]
+        dm = delta_mlp_v[mask]
+        dr = delta_ridge_v[mask]
+        r2_m = float(predictive_r2(dt, dm))
+        r2_r = float(predictive_r2(dt, dr))
+        entry: dict[str, Any] = {
+            "gene_idx":           int(g),
+            "n":                  n_g,
+            "mlp_r2":             r2_m,
+            "ridge_r2":           r2_r,
+            "mlp_minus_ridge_r2": float(r2_m - r2_r),
+            "mlp_pearson":        None,
+            "ridge_pearson":      None,
+        }
+        if n_g >= int(per_gene_min_for_pearson):
+            pearson_m = _safe_float(np.nanmean(pearson_r_per_dim(dt, dm)))
+            pearson_r = _safe_float(np.nanmean(pearson_r_per_dim(dt, dr)))
+            entry["mlp_pearson"]   = pearson_m
+            entry["ridge_pearson"] = pearson_r
+        per_gene_val.append(entry)
+    per_gene_val.sort(key=lambda e: e["mlp_minus_ridge_r2"])  # worst first
+
+    # --- OOD (optional) ---
+    overall_ood: dict[str, float] | None = None
+    per_dim_ood: dict[str, list[float]] | None = None
+    worst_dims_ood: list[dict[str, Any]] = []
+
+    ood_inputs = (z_ctrl_ood, gene_idx_ood, z_pert_ood, z_pert_pred_mlp_ood)
+    if all(x is not None for x in ood_inputs):
+        z_ctrl_o       = _as_float32(z_ctrl_ood)
+        g_idx_o        = np.asarray(gene_idx_ood, dtype=np.int32)
+        z_pert_o       = _as_float32(z_pert_ood)
+        z_pert_pred_o  = _as_float32(z_pert_pred_mlp_ood)
+        delta_true_o   = z_pert_o - z_ctrl_o
+        delta_mlp_o    = z_pert_pred_o - z_ctrl_o
+        delta_ridge_o  = _predict_ridge_baseline(ridge, z_ctrl_o, g_idx_o, n_genes_tr)
+
+        per_dim_mlp_o   = pearson_r_per_dim(delta_true_o, delta_mlp_o)
+        per_dim_ridge_o = pearson_r_per_dim(delta_true_o, delta_ridge_o)
+        per_dim_diff_o  = per_dim_mlp_o - per_dim_ridge_o
+
+        overall_ood = {
+            "mlp_r2":                  float(predictive_r2(delta_true_o, delta_mlp_o)),
+            "mlp_pearson":             _safe_float(np.nanmean(per_dim_mlp_o)),
+            "ridge_r2":                float(predictive_r2(delta_true_o, delta_ridge_o)),
+            "ridge_pearson":           _safe_float(np.nanmean(per_dim_ridge_o)),
+            "mlp_minus_ridge_pearson": _safe_float(np.nanmean(per_dim_diff_o)),
+        }
+        per_dim_ood = {
+            "mlp_pearson":     [float(x) for x in per_dim_mlp_o],
+            "ridge_pearson":   [float(x) for x in per_dim_ridge_o],
+            "mlp_minus_ridge": [float(x) for x in per_dim_diff_o],
+        }
+        n_dim_o = int(per_dim_diff_o.shape[0])
+        k_o = max(0, min(int(n_worst_dims), n_dim_o))
+        order_o = np.argsort(per_dim_diff_o)[:k_o]
+        worst_dims_ood = [
+            {
+                "dim":   int(d),
+                "mlp":   float(per_dim_mlp_o[d]),
+                "ridge": float(per_dim_ridge_o[d]),
+                "diff":  float(per_dim_diff_o[d]),
+            }
+            for d in order_o
+        ]
+
+    return {
+        "overall": {"val": overall_val, "ood": overall_ood},
+        "per_dim": {"val": per_dim_val, "ood": per_dim_ood},
+        "worst_dims": {"val": worst_dims_val, "ood": worst_dims_ood},
+        "per_gene_val": per_gene_val,
     }
 
 

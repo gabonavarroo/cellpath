@@ -10,6 +10,12 @@ dynamics:
   dropout: 0.1
   use_layernorm: true
 
+  # Architecture ablation flags (Phase 2 diagnostic — default OFF). Toggled by
+  # scripts/run_dynamics_ablation.py or via Hydra CLI overrides. See AGENTS.md
+  # Phase 2 ablation matrix and the gate_diagnostics output for selection logic.
+  use_state_linear_skip: false        # mu += Linear(z); gene-independent skip
+  use_gene_delta_bias: false          # mu += GeneDelta[gene_idx]; per-gene additive offset
+
   # Heteroscedastic head
   log_var_min: -5.0                   # clamp on predicted log σ²
   log_var_max: 3.0

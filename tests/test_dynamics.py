@@ -180,3 +180,170 @@ class TestDynamicsLosses:
             f"Loss did not decrease over 20 steps: "
             f"{losses[0]:.4f} → {losses[-1]:.4f}"
         )
+
+
+class TestDynamicsFlags:
+    """Architecture-ablation flags: state-linear skip and per-gene delta bias.
+
+    Defaults must preserve the legacy baseline exactly; non-default combinations
+    must still satisfy the forward contract (z_next = z + mu; correct shapes).
+    """
+
+    def _seeded_model(self, **kwargs):
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(0)
+        return PerturbationDynamicsModel(n_latent=32, n_genes=10, **kwargs)
+
+    def test_forward_with_both_flags_false(self) -> None:
+        torch = _torch_or_skip()
+        model = self._seeded_model(
+            use_state_linear_skip=False, use_gene_delta_bias=False,
+        )
+        z = torch.randn(8, 32)
+        g = torch.randint(1, 11, (8,))
+        z_next, mu, log_var = model(z, g)
+        assert z_next.shape == (8, 32)
+        assert mu.shape == (8, 32)
+        assert log_var.shape == (8, 32)
+        assert torch.allclose(z_next, z + mu, atol=1e-5)
+        assert model.state_linear is None
+        assert model.gene_delta is None
+
+    def test_forward_with_state_skip_only(self) -> None:
+        torch = _torch_or_skip()
+        from torch import nn
+        model = self._seeded_model(
+            use_state_linear_skip=True, use_gene_delta_bias=False,
+        )
+        z = torch.randn(4, 32)
+        g = torch.randint(1, 11, (4,))
+        z_next, mu, log_var = model(z, g)
+        assert z_next.shape == (4, 32)
+        assert mu.shape == (4, 32)
+        assert log_var.shape == (4, 32)
+        assert torch.allclose(z_next, z + mu, atol=1e-5)
+        assert isinstance(model.state_linear, nn.Linear)
+        assert model.gene_delta is None
+
+    def test_forward_with_gene_bias_only(self) -> None:
+        torch = _torch_or_skip()
+        from torch import nn
+        model = self._seeded_model(
+            use_state_linear_skip=False, use_gene_delta_bias=True,
+        )
+        z = torch.randn(4, 32)
+        g = torch.randint(1, 11, (4,))
+        z_next, mu, log_var = model(z, g)
+        assert z_next.shape == (4, 32)
+        assert mu.shape == (4, 32)
+        assert log_var.shape == (4, 32)
+        assert torch.allclose(z_next, z + mu, atol=1e-5)
+        assert model.state_linear is None
+        assert isinstance(model.gene_delta, nn.Embedding)
+
+    def test_forward_with_both_flags_true(self) -> None:
+        torch = _torch_or_skip()
+        from torch import nn
+        model = self._seeded_model(
+            use_state_linear_skip=True, use_gene_delta_bias=True,
+        )
+        z = torch.randn(4, 32)
+        g = torch.randint(1, 11, (4,))
+        z_next, mu, log_var = model(z, g)
+        assert z_next.shape == (4, 32)
+        assert mu.shape == (4, 32)
+        assert log_var.shape == (4, 32)
+        assert torch.allclose(z_next, z + mu, atol=1e-5)
+        assert isinstance(model.state_linear, nn.Linear)
+        assert isinstance(model.gene_delta, nn.Embedding)
+
+    def test_gene_delta_index_0_initialized_to_zero(self) -> None:
+        torch = _torch_or_skip()
+        model = self._seeded_model(
+            use_state_linear_skip=False, use_gene_delta_bias=True,
+        )
+        assert model.gene_delta is not None
+        assert torch.all(model.gene_delta.weight[0] == 0.0)
+        # Other rows should NOT be zero (default Embedding init is N(0, 1)).
+        assert model.gene_delta.weight[1:].abs().sum() > 0
+
+    def test_state_skip_adds_extra_params(self) -> None:
+        _torch_or_skip()
+        base = self._seeded_model(
+            use_state_linear_skip=False, use_gene_delta_bias=False,
+        )
+        skip = self._seeded_model(
+            use_state_linear_skip=True, use_gene_delta_bias=False,
+        )
+        n_base = sum(p.numel() for p in base.parameters())
+        n_skip = sum(p.numel() for p in skip.parameters())
+        # nn.Linear(32, 32) adds 32*32 + 32 = 1056 params.
+        assert n_skip - n_base == 32 * 32 + 32
+
+    def test_gene_bias_adds_extra_params(self) -> None:
+        _torch_or_skip()
+        base = self._seeded_model(
+            use_state_linear_skip=False, use_gene_delta_bias=False,
+        )
+        bias = self._seeded_model(
+            use_state_linear_skip=False, use_gene_delta_bias=True,
+        )
+        n_base = sum(p.numel() for p in base.parameters())
+        n_bias = sum(p.numel() for p in bias.parameters())
+        # nn.Embedding(n_genes+1=11, n_latent=32) adds 11*32 = 352 params.
+        assert n_bias - n_base == 11 * 32
+
+    # ----- Baseline-invariance contract: both flags False == legacy baseline -----
+
+    def test_baseline_invariance_param_count(self) -> None:
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(7)
+        legacy = PerturbationDynamicsModel(n_latent=32, n_genes=10)
+        torch.manual_seed(7)
+        explicit = PerturbationDynamicsModel(
+            n_latent=32, n_genes=10,
+            use_state_linear_skip=False, use_gene_delta_bias=False,
+        )
+        assert sum(p.numel() for p in legacy.parameters()) == sum(
+            p.numel() for p in explicit.parameters()
+        )
+
+    def test_baseline_invariance_state_dict_keys(self) -> None:
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(7)
+        legacy = PerturbationDynamicsModel(n_latent=32, n_genes=10)
+        torch.manual_seed(7)
+        explicit = PerturbationDynamicsModel(
+            n_latent=32, n_genes=10,
+            use_state_linear_skip=False, use_gene_delta_bias=False,
+        )
+        assert set(legacy.state_dict().keys()) == set(explicit.state_dict().keys())
+
+    def test_baseline_invariance_forward_output(self) -> None:
+        """Same seed + same kwargs (defaults) ⇒ same forward output."""
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+
+        torch.manual_seed(11)
+        legacy = PerturbationDynamicsModel(n_latent=32, n_genes=10)
+        torch.manual_seed(11)
+        explicit = PerturbationDynamicsModel(
+            n_latent=32, n_genes=10,
+            use_state_linear_skip=False, use_gene_delta_bias=False,
+        )
+        legacy.eval()
+        explicit.eval()
+        torch.manual_seed(99)
+        z = torch.randn(6, 32)
+        g = torch.randint(1, 11, (6,))
+        with torch.no_grad():
+            l_out = legacy(z, g)
+            e_out = explicit(z, g)
+        for a, b in zip(l_out, e_out):
+            assert torch.equal(a, b), (
+                "both-flags-False output diverged from the legacy default — "
+                "the no-flag and flags=False code paths must be operationally identical."
+            )

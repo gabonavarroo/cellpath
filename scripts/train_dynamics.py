@@ -307,6 +307,21 @@ def main(cfg: DictConfig) -> int:
                     mismatches.append(
                         f"trained_on: saved={saved.get('trained_on')}  current={current_source}"
                     )
+            # Architecture-ablation flags: a saved checkpoint that lacks these keys
+            # is treated as both-False (the legacy baseline) so existing checkpoints
+            # continue to load when flags stay off.
+            current_state_skip = bool(cfg.dynamics.get("use_state_linear_skip", False))
+            current_gene_bias  = bool(cfg.dynamics.get("use_gene_delta_bias",   False))
+            if bool(saved.get("use_state_linear_skip", False)) != current_state_skip:
+                mismatches.append(
+                    f"use_state_linear_skip: saved="
+                    f"{bool(saved.get('use_state_linear_skip', False))}  current={current_state_skip}"
+                )
+            if bool(saved.get("use_gene_delta_bias", False)) != current_gene_bias:
+                mismatches.append(
+                    f"use_gene_delta_bias: saved="
+                    f"{bool(saved.get('use_gene_delta_bias', False))}  current={current_gene_bias}"
+                )
         if mismatches:
             raise RuntimeError(
                 f"Checkpoint at {model_path} is incompatible with current data:\n"
@@ -323,18 +338,22 @@ def main(cfg: DictConfig) -> int:
     # ------------------------------------------------------------------
     # Step 7 — build model (always, whether training or loading checkpoint)
     # ------------------------------------------------------------------
+    use_state_linear_skip = bool(cfg.dynamics.get("use_state_linear_skip", False))
+    use_gene_delta_bias   = bool(cfg.dynamics.get("use_gene_delta_bias",   False))
     model = PerturbationDynamicsModel(
-        n_latent          = n_latent,
-        n_genes           = n_genes,
-        d_emb             = int(cfg.dynamics.d_emb),
-        n_hidden          = int(cfg.dynamics.n_hidden),
-        n_layers          = int(cfg.dynamics.n_layers),
-        dropout           = float(cfg.dynamics.dropout),
-        activation        = str(cfg.dynamics.activation),
-        log_var_min       = float(cfg.dynamics.log_var_min),
-        log_var_max       = float(cfg.dynamics.log_var_max),
-        log_var_init_bias = float(cfg.dynamics.log_var_init_bias),
-        use_layernorm     = bool(cfg.dynamics.use_layernorm),
+        n_latent              = n_latent,
+        n_genes               = n_genes,
+        d_emb                 = int(cfg.dynamics.d_emb),
+        n_hidden              = int(cfg.dynamics.n_hidden),
+        n_layers              = int(cfg.dynamics.n_layers),
+        dropout               = float(cfg.dynamics.dropout),
+        activation            = str(cfg.dynamics.activation),
+        log_var_min           = float(cfg.dynamics.log_var_min),
+        log_var_max           = float(cfg.dynamics.log_var_max),
+        log_var_init_bias     = float(cfg.dynamics.log_var_init_bias),
+        use_layernorm         = bool(cfg.dynamics.use_layernorm),
+        use_state_linear_skip = use_state_linear_skip,
+        use_gene_delta_bias   = use_gene_delta_bias,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -513,24 +532,26 @@ def main(cfg: DictConfig) -> int:
             trained_on = "mock" if meta.get("pairing_method") == "mock" else "real"
 
         config_record: dict = {
-            "n_latent"          : n_latent,
-            "n_genes"           : n_genes,
-            "d_emb"             : int(cfg.dynamics.d_emb),
-            "n_hidden"          : int(cfg.dynamics.n_hidden),
-            "n_layers"          : int(cfg.dynamics.n_layers),
-            "dropout"           : float(cfg.dynamics.dropout),
-            "activation"        : str(cfg.dynamics.activation),
-            "log_var_min"       : float(cfg.dynamics.log_var_min),
-            "log_var_max"       : float(cfg.dynamics.log_var_max),
-            "use_layernorm"     : bool(cfg.dynamics.use_layernorm),
-            "trained_on"        : trained_on,
-            "epochs_run"        : epochs_run,
-            "best_epoch"        : best_epoch,
-            "best_val_nll"      : best_val_nll,
-            "final_val_nll"     : final_val_nll,
-            "lambda_combo"      : lambda_combo,
-            "lambda_log_var_reg": lambda_lv_reg,
-            "seed"              : int(cfg.seed),
+            "n_latent"             : n_latent,
+            "n_genes"              : n_genes,
+            "d_emb"                : int(cfg.dynamics.d_emb),
+            "n_hidden"             : int(cfg.dynamics.n_hidden),
+            "n_layers"             : int(cfg.dynamics.n_layers),
+            "dropout"              : float(cfg.dynamics.dropout),
+            "activation"           : str(cfg.dynamics.activation),
+            "log_var_min"          : float(cfg.dynamics.log_var_min),
+            "log_var_max"          : float(cfg.dynamics.log_var_max),
+            "use_layernorm"        : bool(cfg.dynamics.use_layernorm),
+            "use_state_linear_skip": use_state_linear_skip,
+            "use_gene_delta_bias"  : use_gene_delta_bias,
+            "trained_on"           : trained_on,
+            "epochs_run"           : epochs_run,
+            "best_epoch"           : best_epoch,
+            "best_val_nll"         : best_val_nll,
+            "final_val_nll"        : final_val_nll,
+            "lambda_combo"         : lambda_combo,
+            "lambda_log_var_reg"   : lambda_lv_reg,
+            "seed"                 : int(cfg.seed),
         }
         config_path = Path(cfg.paths.dynamics_config)
         config_path.write_text(json.dumps(config_record, indent=2))
@@ -546,23 +567,25 @@ def main(cfg: DictConfig) -> int:
                 meta       = json.loads(meta_path.read_text())
                 trained_on = "mock" if meta.get("pairing_method") == "mock" else "real"
             minimal: dict = {
-                "n_latent"         : n_latent,
-                "n_genes"          : n_genes,
-                "d_emb"            : int(cfg.dynamics.d_emb),
-                "n_hidden"         : int(cfg.dynamics.n_hidden),
-                "n_layers"         : int(cfg.dynamics.n_layers),
-                "dropout"          : float(cfg.dynamics.dropout),
-                "activation"       : str(cfg.dynamics.activation),
-                "log_var_min"      : float(cfg.dynamics.log_var_min),
-                "log_var_max"      : float(cfg.dynamics.log_var_max),
-                "use_layernorm"    : bool(cfg.dynamics.use_layernorm),
-                "trained_on"       : trained_on,
-                "epochs_run"       : 0,
-                "best_epoch"       : 0,
-                "best_val_nll"     : None,
-                "final_val_nll"    : None,
-                "checkpoint_reused": True,
-                "seed"             : int(cfg.seed),
+                "n_latent"             : n_latent,
+                "n_genes"              : n_genes,
+                "d_emb"                : int(cfg.dynamics.d_emb),
+                "n_hidden"             : int(cfg.dynamics.n_hidden),
+                "n_layers"             : int(cfg.dynamics.n_layers),
+                "dropout"              : float(cfg.dynamics.dropout),
+                "activation"           : str(cfg.dynamics.activation),
+                "log_var_min"          : float(cfg.dynamics.log_var_min),
+                "log_var_max"          : float(cfg.dynamics.log_var_max),
+                "use_layernorm"        : bool(cfg.dynamics.use_layernorm),
+                "use_state_linear_skip": use_state_linear_skip,
+                "use_gene_delta_bias"  : use_gene_delta_bias,
+                "trained_on"           : trained_on,
+                "epochs_run"           : 0,
+                "best_epoch"           : 0,
+                "best_val_nll"         : None,
+                "final_val_nll"        : None,
+                "checkpoint_reused"    : True,
+                "seed"                 : int(cfg.seed),
             }
             config_path.write_text(json.dumps(minimal, indent=2))
             log.info("config.json (checkpoint-reuse stub) written → %s", config_path)
@@ -631,6 +654,10 @@ def main(cfg: DictConfig) -> int:
     # OOD split — report-only, does not affect gate.json["passed"]
     ood_path  = Path(cfg.paths.pairs_ood)
     ood_out: dict | None = None
+    ood_z_ctrl_np:      np.ndarray | None = None
+    ood_g_idx_np:       np.ndarray | None = None
+    ood_z_pert_np:      np.ndarray | None = None
+    ood_z_pert_pred_np: np.ndarray | None = None
     if ood_path.exists():
         ood_z_ctrl, ood_g_idx, ood_z_pert = _npz_to_tensors(
             ood_path, ["z_ctrl", "gene_idx", "z_pert"]
@@ -640,11 +667,15 @@ def main(cfg: DictConfig) -> int:
             ood_z_pert_pred, ood_log_var = _predict_split(
                 model, ood_z_ctrl, ood_g_idx, device=device, batch_size=batch_size_gate,
             )
+            ood_z_ctrl_np      = ood_z_ctrl.numpy()
+            ood_g_idx_np       = ood_g_idx.numpy()
+            ood_z_pert_np      = ood_z_pert.numpy()
+            ood_z_pert_pred_np = ood_z_pert_pred
             ood_out = dynamics_validation_gate(
-                z_ctrl          = ood_z_ctrl.numpy(),
-                gene_idx        = ood_g_idx.numpy(),
-                z_pert_true     = ood_z_pert.numpy(),
-                z_pert_pred_mlp = ood_z_pert_pred,
+                z_ctrl          = ood_z_ctrl_np,
+                gene_idx        = ood_g_idx_np,
+                z_pert_true     = ood_z_pert_np,
+                z_pert_pred_mlp = ood_z_pert_pred_np,
                 log_var_pred    = ood_log_var,
                 cfg_gate        = cfg.dynamics.gate,
                 baselines_train_data = baselines_train_data,
@@ -680,6 +711,39 @@ def main(cfg: DictConfig) -> int:
         Path(cfg.paths.dynamics_ood_metrics).write_text(json.dumps(ood_out, indent=2))
 
     log.info("gate.json written (passed=%s) → %s", gate_record["passed"], gate_path)
+
+    # ------------------------------------------------------------------
+    # Diagnostics — per-dim + per-gene MLP-vs-ridge breakdown for debugging
+    # which dims / genes the MLP loses on. Uses the same ridge baseline helper
+    # as the gate, so numbers are directly comparable.
+    # ------------------------------------------------------------------
+    from src.analysis.metrics import gate_diagnostics
+
+    diagnostics = gate_diagnostics(
+        z_ctrl_train         = train_z_ctrl.numpy(),
+        gene_idx_train       = train_g_idx.numpy(),
+        z_pert_train         = train_z_pert.numpy(),
+        z_ctrl_val           = val_z_ctrl.numpy(),
+        gene_idx_val         = val_g_idx.numpy(),
+        z_pert_val           = val_z_pert.numpy(),
+        z_pert_pred_mlp_val  = val_z_pert_pred,
+        z_ctrl_ood           = ood_z_ctrl_np,
+        gene_idx_ood         = ood_g_idx_np,
+        z_pert_ood           = ood_z_pert_np,
+        z_pert_pred_mlp_ood  = ood_z_pert_pred_np,
+    )
+    diag_path = Path(cfg.paths.dynamics_diagnostics)
+    diag_path.write_text(json.dumps(diagnostics, indent=2))
+    log.info(
+        "gate_diagnostics.json written | val mlp-ridge Pearson=%+.4f | "
+        "ood mlp-ridge Pearson=%s | %s",
+        diagnostics["overall"]["val"]["mlp_minus_ridge_pearson"],
+        (
+            f"{diagnostics['overall']['ood']['mlp_minus_ridge_pearson']:+.4f}"
+            if diagnostics["overall"]["ood"] is not None else "n/a"
+        ),
+        diag_path,
+    )
 
     if not val_out["passed"]:
         log.error(

@@ -41,11 +41,15 @@ pairs_metadata: ${paths.pairs_dir}/metadata.json
 
 dynamics_dir: ${paths.artifacts}/dynamics
 dynamics_model: ${paths.dynamics_dir}/model.pt
+dynamics_model_best_nll: ${paths.dynamics_dir}/model_best_nll.pt
+dynamics_model_best_gate: ${paths.dynamics_dir}/model_best_gate.pt
 dynamics_config: ${paths.dynamics_dir}/config.json
 dynamics_gate: ${paths.dynamics_dir}/gate.json
 dynamics_val_metrics: ${paths.dynamics_dir}/val_metrics.json
 dynamics_ood_metrics: ${paths.dynamics_dir}/ood_metrics.json
 dynamics_diagnostics: ${paths.dynamics_dir}/gate_diagnostics.json
+dynamics_epoch_metrics: ${paths.dynamics_dir}/epoch_metrics.json
+dynamics_checkpoint_comparison: ${paths.dynamics_dir}/checkpoint_comparison.json
 
 dynamics_ablation_dir: ${paths.artifacts}/dynamics_ablation
 dynamics_ablation_summary_json: ${paths.dynamics_ablation_dir}/summary.json

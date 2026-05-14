@@ -39,7 +39,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Generator
@@ -47,6 +49,7 @@ from typing import Generator
 import hydra
 import numpy as np
 import torch
+import torch.nn.functional as F
 from omegaconf import DictConfig
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -199,6 +202,8 @@ def _predict_split(
 def main(cfg: DictConfig) -> int:
     """Hydra-driven main. See module docstring for the 10-step workflow."""
     # Deferred src.* imports so Hydra config composition never touches the model.
+    from src.analysis.metrics import dynamics_validation_gate, gate_diagnostics
+    from src.analysis.model_selection import recommend_checkpoint
     from src.data.perturbation_pairs import generate_mock_pairs
     from src.models.dynamics import (
         PerturbationDynamicsModel,
@@ -384,6 +389,23 @@ def main(cfg: DictConfig) -> int:
             f"{len(combo_loader)} batches" if combo_loader is not None else "none",
         )
 
+        # ---- Pre-load val + train arrays for per-epoch gate tracking ----
+        # train_np was already loaded above for the n_latent contract check.
+        val_np_ep     = np.load(val_path)
+        val_z_ctrl_np = val_np_ep["z_ctrl"].astype(np.float32)
+        val_g_idx_np  = val_np_ep["gene_idx"]
+        val_z_pert_np = val_np_ep["z_pert"].astype(np.float32)
+        # Tensors for _predict_split (reused every epoch; created once).
+        val_z_ctrl_t  = torch.from_numpy(val_z_ctrl_np)
+        val_g_idx_t   = torch.from_numpy(val_g_idx_np.astype(np.int64))
+        ep_train_data = {
+            "z_ctrl":   train_np["z_ctrl"].astype(np.float32),
+            "gene_idx": train_np["gene_idx"],
+            "z_pert":   train_np["z_pert"].astype(np.float32),
+        }
+        best_nll_path  = Path(cfg.paths.dynamics_model_best_nll)
+        best_gate_path = Path(cfg.paths.dynamics_model_best_gate)
+
         # ---- 8b: optimizer + LR scheduler ----
         optimizer = torch.optim.AdamW(
             model.parameters(),
@@ -412,20 +434,44 @@ def main(cfg: DictConfig) -> int:
         # ---- 8c: training loop ----
         lambda_combo      = float(cfg.dynamics.lambda_combo)
         lambda_lv_reg     = float(cfg.dynamics.lambda_log_var_reg)
+        lambda_mse_delta  = float(cfg.dynamics.get("lambda_mse_delta", 0.0))
+        track_epoch_gate  = bool(cfg.dynamics.get("track_epoch_gate_metrics", True))
+        selection_metric  = str(cfg.dynamics.get("selection_metric", "val_nll")).lower()
         max_epochs        = int(cfg.dynamics.max_epochs)
         patience          = int(cfg.dynamics.early_stop_patience)
+        batch_size_ep     = int(cfg.dynamics.batch_size)
 
         combo_iter        = _iter_infinite(combo_loader) if combo_loader is not None else None
         best_val_nll      = float("inf")
-        best_epoch        = 0
+        best_nll_epoch    = 0
+        # Gate-margin tracker: "preferred" = all 4 non-ridge margins pass; "fallback" = any unc-ok.
+        best_gate_margin      = float("-inf")   # best margin seen in preferred epochs
+        best_any_margin       = float("-inf")   # best margin seen in any unc-ok epoch
+        best_gate_epoch       = 0
+        best_gate_has_preferred = False         # whether best_gate_path holds a preferred save
         patience_counter  = 0
         epochs_run        = 0
         final_val_nll     = float("inf")
+        epoch_records: list[dict] = []
+
+        if lambda_mse_delta > 0.0:
+            log.info(
+                "Hybrid loss enabled: total_loss = NLL + %.4f × MSE(μ, Δz)",
+                lambda_mse_delta,
+            )
+        if track_epoch_gate:
+            log.info(
+                "Epoch gate tracking enabled (dynamics_validation_gate called each epoch). "
+                "Epoch metrics → %s",
+                cfg.paths.dynamics_epoch_metrics,
+            )
 
         log.info(
             "Training start | max_epochs=%d | patience=%d | "
-            "lambda_combo=%.3f | lambda_lv_reg=%.4f",
+            "lambda_combo=%.3f | lambda_lv_reg=%.4f | lambda_mse_delta=%.4f | "
+            "selection_metric=%s",
             max_epochs, patience, lambda_combo, lambda_lv_reg,
+            lambda_mse_delta, selection_metric,
         )
 
         for epoch in range(max_epochs):
@@ -444,6 +490,8 @@ def main(cfg: DictConfig) -> int:
                 target_delta     = z_p - z_c
                 loss_nll         = heteroscedastic_nll(mu, lv, target_delta, log_var_reg=lambda_lv_reg)
                 loss             = loss_nll
+                if lambda_mse_delta > 0.0:
+                    loss = loss + lambda_mse_delta * F.mse_loss(mu, target_delta)
                 batch_combo_loss = 0.0
 
                 if combo_iter is not None and lambda_combo > 0.0:
@@ -468,7 +516,7 @@ def main(cfg: DictConfig) -> int:
             if scheduler is not None:
                 scheduler.step()
 
-            # ---- validate ----
+            # ---- validate NLL ----
             model.eval()
             val_nll_sum = 0.0
             n_val       = 0
@@ -490,38 +538,167 @@ def main(cfg: DictConfig) -> int:
             epochs_run    = epoch + 1
             final_val_nll = avg_val
 
+            # ---- per-epoch record (always populated; gate fields added below) ----
+            epoch_record: dict = {
+                "epoch":     epochs_run,
+                "train_nll": float(avg_nll),
+                "val_nll":   float(avg_val),
+                "lr":        float(optimizer.param_groups[0]["lr"]),
+            }
+
+            # ---- epoch gate metrics (optional but on by default) ----
+            if track_epoch_gate:
+                _val_pred_ep, _val_lv_ep = _predict_split(
+                    model, val_z_ctrl_t, val_g_idx_t,
+                    device=device, batch_size=batch_size_ep,
+                )
+                _gate_ep   = dynamics_validation_gate(
+                    z_ctrl               = val_z_ctrl_np,
+                    gene_idx             = val_g_idx_np,
+                    z_pert_true          = val_z_pert_np,
+                    z_pert_pred_mlp      = _val_pred_ep,
+                    log_var_pred         = _val_lv_ep,
+                    cfg_gate             = cfg.dynamics.gate,
+                    baselines_train_data = ep_train_data,
+                )
+                _ep_prim          = _gate_ep["primary"]
+                _ep_unc           = _gate_ep["uncertainty_calibration"]
+                _ridge_pearson_ep = float(_ep_prim["baselines"]["linear_ridge"]["pearson_r"])
+                epoch_record.update({
+                    "val_mlp_r2":                  float(_ep_prim["r2"]),
+                    "val_mlp_pearson":             float(_ep_prim["pearson_r"]),
+                    "val_ridge_r2":                float(_ep_prim["baselines"]["linear_ridge"]["r2"]),
+                    "val_ridge_pearson":           _ridge_pearson_ep,
+                    "val_mlp_minus_ridge_pearson": float(_ep_prim["pearson_r"]) - _ridge_pearson_ep,
+                    "uncertainty_spearman":        float(_ep_unc["spearman"]),
+                    "margin_checks":               _ep_prim["margin_checks"],
+                    "all_margins_pass":            bool(_gate_ep["passed"]),
+                })
+
             log.info(
                 "epoch %03d/%03d | loss=%.4f  nll=%.4f  combo=%.4f | "
-                "val_nll=%.4f  best=%.4f | lr=%.2e",
+                "val_nll=%.4f  best=%.4f | lr=%.2e%s",
                 epochs_run, max_epochs,
                 avg_total, avg_nll, avg_combo,
                 avg_val, best_val_nll,
                 optimizer.param_groups[0]["lr"],
+                (
+                    f" | gate_margin={epoch_record.get('val_mlp_minus_ridge_pearson', 0.0):+.4f}"
+                    if track_epoch_gate else ""
+                ),
             )
 
+            # ---- best-NLL checkpoint ----
             if avg_val < best_val_nll:
                 best_val_nll     = avg_val
-                best_epoch       = epochs_run
+                best_nll_epoch   = epochs_run
                 patience_counter = 0
-                _save_state_dict(model, model_path)
+                _save_state_dict(model, best_nll_path)
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
                     log.info(
                         "Early stopping at epoch %d (no val improvement for %d epochs). "
                         "Best epoch=%d  val_nll=%.4f.",
-                        epochs_run, patience, best_epoch, best_val_nll,
+                        epochs_run, patience, best_nll_epoch, best_val_nll,
                     )
+                    epoch_records.append(epoch_record)
                     break
 
-        # Safety fallback: if val_nll never improved (e.g. NaN on first epoch)
-        if not model_path.exists():
-            log.warning("No best checkpoint was written; saving current model state.")
-            _save_state_dict(model, model_path)
+            # ---- best gate-margin checkpoint (only when epoch tracking is active) ----
+            if track_epoch_gate and "val_mlp_minus_ridge_pearson" in epoch_record:
+                _margin_ep = float(epoch_record["val_mlp_minus_ridge_pearson"])
+                _unc_ep    = float(epoch_record.get("uncertainty_spearman", float("nan")))
+                _unc_ok    = (
+                    math.isfinite(_unc_ep)
+                    and _unc_ep >= float(
+                        cfg.dynamics.gate.min_uncertainty_calibration_spearman
+                    ) * 0.5
+                )
+                _all_4_ok  = _unc_ok and (
+                    epoch_record["margin_checks"]["margin_vs_noop_r2"]["pass"]
+                    and epoch_record["margin_checks"]["margin_vs_global_mean_r2"]["pass"]
+                    and epoch_record["margin_checks"]["margin_vs_per_gene_mean_r2"]["pass"]
+                    and epoch_record["margin_checks"]["margin_vs_knn_r2"]["pass"]
+                )
+                if math.isfinite(_margin_ep) and _unc_ok:
+                    if _all_4_ok and (
+                        not best_gate_has_preferred or _margin_ep > best_gate_margin
+                    ):
+                        # Preferred save: all 4 non-ridge margins pass.
+                        best_gate_margin        = _margin_ep
+                        best_gate_epoch         = epochs_run
+                        best_gate_has_preferred = True
+                        _save_state_dict(model, best_gate_path)
+                    elif not best_gate_has_preferred and _margin_ep > best_any_margin:
+                        # Fallback save: no preferred epoch yet, best unc-ok epoch so far.
+                        best_gate_epoch = epochs_run
+                        _save_state_dict(model, best_gate_path)
+                    if _margin_ep > best_any_margin:
+                        best_any_margin = _margin_ep
+
+            epoch_records.append(epoch_record)
+
+        # Safety fallback: if NLL never improved (e.g. NaN on first epoch)
+        if not best_nll_path.exists():
+            log.warning("No best-NLL checkpoint was written; saving current model state.")
+            _save_state_dict(model, best_nll_path)
+
+        # Gate checkpoint status
+        if best_gate_has_preferred:
+            gate_checkpoint_status = "preferred"
+        elif best_gate_epoch > 0:
+            gate_checkpoint_status = "fallback"
+            log.warning(
+                "No epoch satisfied all 4 non-ridge margin thresholds for the gate-margin "
+                "checkpoint.  Saved best finite-uncertainty epoch (epoch=%d, margin=%+.4f) "
+                "as model_best_gate.pt (status=fallback).  Review "
+                "checkpoint_comparison.json before trusting this checkpoint.",
+                best_gate_epoch, best_any_margin,
+            )
+        else:
+            gate_checkpoint_status = "none"
+            log.info("No gate-margin checkpoint was saved (no epoch met the uncertainty filter).")
+
+        # Final model selection: copy chosen checkpoint to model.pt
+        if selection_metric == "gate_margin" and best_gate_path.exists():
+            shutil.copy2(str(best_gate_path), str(model_path))
+            selected_source = "best_gate"
+            log.info(
+                "selection_metric=gate_margin → model.pt ← model_best_gate.pt "
+                "(epoch=%d, margin=%+.4f, status=%s)",
+                best_gate_epoch,
+                best_gate_margin if best_gate_has_preferred else best_any_margin,
+                gate_checkpoint_status,
+            )
+        else:
+            if selection_metric == "gate_margin" and not best_gate_path.exists():
+                log.warning(
+                    "selection_metric=gate_margin requested but model_best_gate.pt does not "
+                    "exist; falling back to best-NLL checkpoint."
+                )
+            shutil.copy2(str(best_nll_path), str(model_path))
+            selected_source = "best_nll"
+            log.info(
+                "selection_metric=%s → model.pt ← model_best_nll.pt "
+                "(epoch=%d, val_nll=%.4f)",
+                selection_metric, best_nll_epoch, best_val_nll,
+            )
+
+        # Write epoch_metrics.json
+        if epoch_records:
+            _ep_metrics_path = Path(cfg.paths.dynamics_epoch_metrics)
+            _ep_metrics_path.write_text(json.dumps(epoch_records, indent=2))
+            log.info(
+                "epoch_metrics.json written (%d epochs) → %s",
+                len(epoch_records), _ep_metrics_path,
+            )
 
         log.info(
-            "Training complete | epochs_run=%d | best_epoch=%d | best_val_nll=%.4f",
-            epochs_run, best_epoch, best_val_nll,
+            "Training complete | epochs_run=%d | best_nll_epoch=%d | best_val_nll=%.4f | "
+            "best_gate_epoch=%d | gate_status=%s | selected=%s",
+            epochs_run, best_nll_epoch, best_val_nll,
+            best_gate_epoch, gate_checkpoint_status, selected_source,
         )
 
         # ---- Step 9: write config.json ----
@@ -532,30 +709,204 @@ def main(cfg: DictConfig) -> int:
             trained_on = "mock" if meta.get("pairing_method") == "mock" else "real"
 
         config_record: dict = {
-            "n_latent"             : n_latent,
-            "n_genes"              : n_genes,
-            "d_emb"                : int(cfg.dynamics.d_emb),
-            "n_hidden"             : int(cfg.dynamics.n_hidden),
-            "n_layers"             : int(cfg.dynamics.n_layers),
-            "dropout"              : float(cfg.dynamics.dropout),
-            "activation"           : str(cfg.dynamics.activation),
-            "log_var_min"          : float(cfg.dynamics.log_var_min),
-            "log_var_max"          : float(cfg.dynamics.log_var_max),
-            "use_layernorm"        : bool(cfg.dynamics.use_layernorm),
-            "use_state_linear_skip": use_state_linear_skip,
-            "use_gene_delta_bias"  : use_gene_delta_bias,
-            "trained_on"           : trained_on,
-            "epochs_run"           : epochs_run,
-            "best_epoch"           : best_epoch,
-            "best_val_nll"         : best_val_nll,
-            "final_val_nll"        : final_val_nll,
-            "lambda_combo"         : lambda_combo,
-            "lambda_log_var_reg"   : lambda_lv_reg,
-            "seed"                 : int(cfg.seed),
+            "n_latent"              : n_latent,
+            "n_genes"               : n_genes,
+            "d_emb"                 : int(cfg.dynamics.d_emb),
+            "n_hidden"              : int(cfg.dynamics.n_hidden),
+            "n_layers"              : int(cfg.dynamics.n_layers),
+            "dropout"               : float(cfg.dynamics.dropout),
+            "activation"            : str(cfg.dynamics.activation),
+            "log_var_min"           : float(cfg.dynamics.log_var_min),
+            "log_var_max"           : float(cfg.dynamics.log_var_max),
+            "use_layernorm"         : bool(cfg.dynamics.use_layernorm),
+            "use_state_linear_skip" : use_state_linear_skip,
+            "use_gene_delta_bias"   : use_gene_delta_bias,
+            "trained_on"            : trained_on,
+            "epochs_run"            : epochs_run,
+            "best_epoch"            : best_nll_epoch,   # backward-compat alias
+            "best_nll_epoch"        : best_nll_epoch,
+            "best_val_nll"          : best_val_nll,
+            "final_val_nll"         : final_val_nll,
+            "best_gate_epoch"       : best_gate_epoch,
+            "best_gate_margin"      : (
+                float(best_gate_margin) if best_gate_has_preferred else float(best_any_margin)
+            ),
+            "gate_checkpoint_status": gate_checkpoint_status,
+            "selection_metric"      : selection_metric,
+            "selected_source"       : selected_source,
+            "lambda_combo"          : lambda_combo,
+            "lambda_log_var_reg"    : lambda_lv_reg,
+            "lambda_mse_delta"      : lambda_mse_delta,
+            "seed"                  : int(cfg.seed),
         }
         config_path = Path(cfg.paths.dynamics_config)
         config_path.write_text(json.dumps(config_record, indent=2))
         log.info("config.json written → %s", config_path)
+
+        # ------------------------------------------------------------------
+        # Checkpoint comparison — evaluate both checkpoints on val + OOD
+        # ------------------------------------------------------------------
+        _cmp_train_np   = np.load(train_path)
+        _cmp_val_np     = np.load(val_path) if val_path.exists() else None
+
+        _cmp_train_data = {
+            "z_ctrl":   _cmp_train_np["z_ctrl"].astype(np.float32),
+            "gene_idx": _cmp_train_np["gene_idx"],
+            "z_pert":   _cmp_train_np["z_pert"].astype(np.float32),
+        }
+
+        def _eval_ckpt(ckpt_path: Path) -> dict | None:
+            """Load one checkpoint; evaluate on val + OOD; return comparison dict."""
+            if not ckpt_path.exists() or _cmp_val_np is None:
+                return None
+            _state = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(_state)
+            model.to(device)
+            model.eval()
+            _bs = int(cfg.dynamics.batch_size)
+
+            # Val evaluation
+            _vc_t = torch.from_numpy(_cmp_val_np["z_ctrl"].astype(np.float32))
+            _vg_t = torch.from_numpy(_cmp_val_np["gene_idx"].astype(np.int64))
+            _vpred, _vlv = _predict_split(model, _vc_t, _vg_t, device=device, batch_size=_bs)
+            _gv = dynamics_validation_gate(
+                z_ctrl               = _cmp_val_np["z_ctrl"].astype(np.float32),
+                gene_idx             = _cmp_val_np["gene_idx"],
+                z_pert_true          = _cmp_val_np["z_pert"].astype(np.float32),
+                z_pert_pred_mlp      = _vpred,
+                log_var_pred         = _vlv,
+                cfg_gate             = cfg.dynamics.gate,
+                baselines_train_data = _cmp_train_data,
+            )
+            _vp = _gv["primary"]
+            _vu = _gv["uncertainty_calibration"]
+            _rp = float(_vp["baselines"]["linear_ridge"]["pearson_r"])
+            val_block = {
+                "mlp_r2":                  float(_vp["r2"]),
+                "mlp_pearson":             float(_vp["pearson_r"]),
+                "ridge_r2":                float(_vp["baselines"]["linear_ridge"]["r2"]),
+                "ridge_pearson":           _rp,
+                "mlp_minus_ridge_pearson": float(_vp["pearson_r"]) - _rp,
+                "uncertainty_spearman":    float(_vu["spearman"]),
+                "passed":                  bool(_gv["passed"]),
+                "margin_checks":           _vp["margin_checks"],
+            }
+
+            ood_block  = None
+            dim11_val  = None
+            dim11_ood  = None
+            _ood_path  = Path(cfg.paths.pairs_ood)
+            _ood_pred  = None
+            if _ood_path.exists():
+                _cmp_ood = np.load(_ood_path)
+                if len(_cmp_ood["z_ctrl"]) > 0:
+                    _oc_t = torch.from_numpy(_cmp_ood["z_ctrl"].astype(np.float32))
+                    _og_t = torch.from_numpy(_cmp_ood["gene_idx"].astype(np.int64))
+                    _ood_pred, _ood_lv = _predict_split(
+                        model, _oc_t, _og_t, device=device, batch_size=_bs,
+                    )
+                    _go = dynamics_validation_gate(
+                        z_ctrl               = _cmp_ood["z_ctrl"].astype(np.float32),
+                        gene_idx             = _cmp_ood["gene_idx"],
+                        z_pert_true          = _cmp_ood["z_pert"].astype(np.float32),
+                        z_pert_pred_mlp      = _ood_pred,
+                        log_var_pred         = _ood_lv,
+                        cfg_gate             = cfg.dynamics.gate,
+                        baselines_train_data = _cmp_train_data,
+                    )
+                    _op  = _go["primary"]
+                    _ou  = _go["uncertainty_calibration"]
+                    _rop = float(_op["baselines"]["linear_ridge"]["pearson_r"])
+                    ood_block = {
+                        "mlp_r2":                  float(_op["r2"]),
+                        "mlp_pearson":             float(_op["pearson_r"]),
+                        "ridge_r2":                float(_op["baselines"]["linear_ridge"]["r2"]),
+                        "ridge_pearson":           _rop,
+                        "mlp_minus_ridge_pearson": float(_op["pearson_r"]) - _rop,
+                        "uncertainty_spearman":    float(_ou["spearman"]),
+                    }
+                    # Dim 11 diagnostic via gate_diagnostics (single source of truth)
+                    _diag = gate_diagnostics(
+                        z_ctrl_train        = _cmp_train_data["z_ctrl"],
+                        gene_idx_train      = _cmp_train_data["gene_idx"],
+                        z_pert_train        = _cmp_train_data["z_pert"],
+                        z_ctrl_val          = _cmp_val_np["z_ctrl"].astype(np.float32),
+                        gene_idx_val        = _cmp_val_np["gene_idx"],
+                        z_pert_val          = _cmp_val_np["z_pert"].astype(np.float32),
+                        z_pert_pred_mlp_val = _vpred,
+                        z_ctrl_ood          = _cmp_ood["z_ctrl"].astype(np.float32),
+                        gene_idx_ood        = _cmp_ood["gene_idx"],
+                        z_pert_ood          = _cmp_ood["z_pert"].astype(np.float32),
+                        z_pert_pred_mlp_ood = _ood_pred,
+                    )
+                    _per_dim_v = _diag["per_dim"]["val"]
+                    _per_dim_o = _diag["per_dim"]["ood"]
+                    if len(_per_dim_v["mlp_pearson"]) > 11:
+                        dim11_val = {
+                            "mlp_pearson":   _per_dim_v["mlp_pearson"][11],
+                            "ridge_pearson": _per_dim_v["ridge_pearson"][11],
+                        }
+                    if _per_dim_o is not None and len(_per_dim_o["mlp_pearson"]) > 11:
+                        dim11_ood = {
+                            "mlp_pearson":   _per_dim_o["mlp_pearson"][11],
+                            "ridge_pearson": _per_dim_o["ridge_pearson"][11],
+                        }
+            return {
+                "val":       val_block,
+                "ood":       ood_block,
+                "dim11_val": dim11_val,
+                "dim11_ood": dim11_ood,
+            }
+
+        _nll_eval  = _eval_ckpt(Path(cfg.paths.dynamics_model_best_nll))
+        _gate_eval = (
+            _eval_ckpt(Path(cfg.paths.dynamics_model_best_gate))
+            if Path(cfg.paths.dynamics_model_best_gate).exists() else None
+        )
+        _rec, _rationale = recommend_checkpoint(_nll_eval, _gate_eval)
+
+        # Determine whether the selected checkpoint is consistent with the recommendation.
+        if selected_source == "best_gate":
+            _selected_is_recommended = (_rec == "consider_best_gate")
+            if not _selected_is_recommended:
+                log.warning(
+                    "⚠ CHECKPOINT SELECTION MISMATCH: selection_metric=gate_margin chose "
+                    "model_best_gate.pt, but recommend_checkpoint says '%s' "
+                    "(rationale: %s).  "
+                    "Consider re-running with dynamics.selection_metric=val_nll.",
+                    _rec, _rationale,
+                )
+        else:
+            _selected_is_recommended = (_rec in ("keep_best_nll", "consider_best_gate"))
+
+        _cmp_record: dict = {
+            "selection_metric":        selection_metric,
+            "selected_source":         selected_source,
+            "selected_is_recommended": _selected_is_recommended,
+            "best_nll": {
+                "checkpoint": "best_nll",
+                "epoch":      best_nll_epoch,
+                **(_nll_eval or {}),
+            },
+            "best_gate": (
+                {
+                    "checkpoint":             "best_gate",
+                    "epoch":                  best_gate_epoch,
+                    "gate_checkpoint_status": gate_checkpoint_status,
+                    **(_gate_eval or {}),
+                }
+                if _gate_eval is not None else None
+            ),
+            "recommendation": _rec,
+            "rationale":      _rationale,
+        }
+        _cmp_path = Path(cfg.paths.dynamics_checkpoint_comparison)
+        _cmp_path.write_text(json.dumps(_cmp_record, indent=2))
+        log.info(
+            "checkpoint_comparison.json written | recommendation=%s | "
+            "selected=%s | is_recommended=%s → %s",
+            _rec, selected_source, _selected_is_recommended, _cmp_path,
+        )
 
     else:
         # Checkpoint reused: write a minimal config.json only if one doesn't exist yet.
@@ -593,8 +944,6 @@ def main(cfg: DictConfig) -> int:
     # ------------------------------------------------------------------
     # Step 10 — Phase 2 validation gate (always runs)
     # ------------------------------------------------------------------
-    from src.analysis.metrics import dynamics_validation_gate
-
     val_path_p = Path(cfg.paths.pairs_val)
     if not val_path_p.exists():
         log.error(
@@ -717,8 +1066,6 @@ def main(cfg: DictConfig) -> int:
     # which dims / genes the MLP loses on. Uses the same ridge baseline helper
     # as the gate, so numbers are directly comparable.
     # ------------------------------------------------------------------
-    from src.analysis.metrics import gate_diagnostics
-
     diagnostics = gate_diagnostics(
         z_ctrl_train         = train_z_ctrl.numpy(),
         gene_idx_train       = train_g_idx.numpy(),

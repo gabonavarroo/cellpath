@@ -3,6 +3,7 @@
 Module ownership
 ----------------
 - :mod:`src.analysis.metrics`           : SINGLE SOURCE OF TRUTH; shared (both agents add here).
+- :mod:`src.analysis.model_selection`   : Agent B. Checkpoint recommendation logic.
 - :mod:`src.analysis.latent_space`      : Agent A. UMAP, silhouette, ARI.
 - :mod:`src.analysis.trajectory`        : Agent A owns plumbing; Agent B contributes data.
 - :mod:`src.analysis.depmap_validation` : Agent A. Hypergeometric + GSEA + null comparison.

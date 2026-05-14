@@ -6,6 +6,291 @@
 
 ---
 
+## Session 2026-05-14-1800 (agent: B)
+
+**Phase:** 2 — Promote best dynamics candidate as default; document Phase 2 status.
+
+**Status:** Best dynamics candidate promoted to default config.  Phase 2 gate still fails.
+RL remains blocked.
+
+**Metrics:**
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| val MLP Pearson | ≥ 0.55 | 0.60846 | ✓ |
+| val MLP−ridge Pearson margin | ≥ +0.030 | +0.00737 | ✗ BLOCKED |
+| OOD MLP Pearson | ≥ 0.40 | 0.47931 | ✓ |
+| OOD MLP−ridge Pearson margin | — | +0.04010 | ✓ |
+| uncertainty Spearman | ≥ 0.20 | 0.2490 | ✓ |
+
+**Changes this session:**
+- `config/dynamics.yaml`: promoted best candidate as new defaults —
+  `use_state_linear_skip: true`, `selection_metric: gate_margin`, `lr: 1e-4`,
+  `max_epochs: 300`, `early_stop_patience: 35`.  Comments updated to explain each choice
+  and reiterate that Phase 2 gate still fails.
+- `config/experiments/dynamics_legacy_mlp.yaml`: new overlay preserving pre-ablation defaults
+  (plain MLP, `val_nll`, `lr=1e-3`, `max_epochs=100`, `patience=10`) for reproducibility.
+- `EXPERIMENTS.md §1.4`: updated Default column for lr/max_epochs/patience and added four
+  new rows for `use_state_linear_skip`, `use_gene_delta_bias`, `selection_metric`,
+  `lambda_mse_delta`.  Added §8 Phase 2 experiment results table (9 runs) + §4.2 entry for
+  legacy config.
+
+**Blockers:** P1 — `margin_vs_linear_ridge_pearson` is +0.007 vs required +0.030.
+  Hypothesis: dim 11 latent failure and/or OT pair quality limit the ridge-margin ceiling.
+  Dynamics hyperparameter sweeps have been exhausted without closing the gap.
+
+**Next (3 priorities):**
+1. Latent space diagnostics: inspect dim 11 per-gene MLP vs ridge Pearson; check OT pair
+   quality (coupling entropy, per-gene Δ distribution).
+2. VAE re-inspection: n_latent ablation (16/32/64) to see if 32 dims is the right tradeoff.
+3. (Do not start RL until gate passes.)
+
+---
+
+## Session 2026-05-14-1600 (agent: B)
+
+**Phase:** 2 — Dynamics validation gate, checkpoint selection infrastructure.
+
+Dynamics LR/MSE sweep complete.
+
+- Best validation candidate:
+  - lr1e-4_mse0 / best_gate
+  - val Pearson=0.60846
+  - val MLP-ridge Pearson margin=+0.00737
+  - OOD Pearson=0.47931
+  - OOD MLP-ridge Pearson margin=+0.04010
+  - uncertainty Spearman=0.2490
+
+- No configuration passed the required +0.03 ridge margin. Lower LR improved validation margin but did not approach the threshold. Small hybrid MSE values 0.05 and 0.1 had negligible effect.
+
+Conclusion: state_linear + lower LR + best_gate checkpoint is the strongest current dynamics candidate, but Phase 2 remains blocked. Next step is latent/pair diagnostics, especially dim 11 and VAE latent quality, rather than further small dynamics hyperparameter sweeps.
+
+- Best current Model:
+state_linear=true
+gene_delta=false
+lr=1e-4
+lambda_mse_delta=0.0
+selection_metric=gate_margin
+best_gate checkpoint
+
+The dynamics model improves over ridge on OOD and slightly over ridge on validation, but it cannot reach the strict +0.03 validation ridge-margin gate under current VAE/pair artifacts.
+
+
+
+**Status:** Architecture ablation concluded; `state_linear` confirmed as best candidate;
+diagnostic and checkpoint-selection infrastructure added.  Gate still fails on
+`margin_vs_linear_ridge_pearson`.  RL remains blocked.
+
+- **Ablation conclusion (real Norman pairs, from previous session results):**
+  - `state_linear`: val Pearson ≈ 0.6031, OOD Pearson ≈ 0.4854, uncertainty Spearman ≈ 0.247.
+  - `gene_bias` / `state_linear+gene_bias`: OOD collapse (OOD Pearson ≈ 0.26–0.29) → **rejected**.
+  - `state_linear` is the recommended architecture going forward.
+  - Gate still fails: `margin_vs_linear_ridge_pearson` ≈ +0.002 (needs ≥ +0.03).
+
+- **Added (config):**
+  - `config/dynamics.yaml`: `selection_metric: val_nll` (default; also allows `gate_margin`),
+    `lambda_mse_delta: 0.0` (default off; enables hybrid NLL+MSE loss), `track_epoch_gate_metrics: true`.
+  - `config/paths.yaml`: four new path keys — `dynamics_model_best_nll`, `dynamics_model_best_gate`,
+    `dynamics_epoch_metrics`, `dynamics_checkpoint_comparison`.
+
+- **Added (training script `scripts/train_dynamics.py`):**
+  - **Dual checkpointing**: saves `model_best_nll.pt` (lowest val NLL) and `model_best_gate.pt`
+    (best `val_mlp_minus_ridge_pearson` with uncertainty filter ≥ 0.5× threshold).  Gate checkpoint
+    prefers epochs where all 4 non-ridge margins pass; falls back to best unc-ok epoch with a
+    warning if no preferred epoch exists.
+  - **Epoch gate tracking**: `dynamics_validation_gate` called each validation epoch (off by
+    setting `track_epoch_gate_metrics: false`); per-epoch records written to `epoch_metrics.json`.
+    Ridge is fitted inside `dynamics_validation_gate` — no duplication of ridge logic.
+  - **Hybrid loss**: `loss = NLL + lambda_mse_delta * MSE(μ, Δz)`.  Default `lambda_mse_delta=0.0`
+    preserves existing NLL-only behavior exactly (verified by test).
+  - **Model selection**: after training, copies `model_best_nll.pt` or `model_best_gate.pt` to
+    `model.pt` depending on `selection_metric`.  Default `val_nll` is unchanged.
+  - **Checkpoint comparison**: evaluates both checkpoints on val + OOD; writes
+    `checkpoint_comparison.json` with `selected_source`, `selected_is_recommended`,
+    `recommendation` (`keep_best_nll` / `consider_best_gate` / `reject_best_gate`), `rationale`,
+    and per-checkpoint `dim11_val`/`dim11_ood` diagnostic.  If `selection_metric=gate_margin`
+    selects a checkpoint that `recommend_checkpoint` rejects, a loud warning is logged.
+
+- **Added (`src/analysis/model_selection.py`):**
+  - `recommend_checkpoint(best_nll_eval, best_gate_eval, *, ood_tolerance=0.02,
+    min_uncertainty=0.20)` — conservative 6-rule decision tree; pure-Python, no I/O, no torch.
+    Conservative defaults: falls back to `keep_best_nll` on missing/ambiguous data.
+
+- **Tests:**
+  - `pytest tests/test_dynamics.py -v` → **25 passed** (added: `TestHybridLoss` ×3,
+    `TestEpochMetrics` ×1).
+  - `pytest tests/test_model_selection.py -v` → **12 passed** (new file; covers all 6 decision
+    rules + edge cases for None inputs, missing OOD, and custom `ood_tolerance`).
+  - `pytest tests/test_metrics.py -v` → **41 passed** (no regressions).
+  - `pytest tests/ -v --no-cov -k "not slow"` → **134 passed, 6 xfail** (up from 118; no regressions).
+  - `python scripts/train_dynamics.py +dry_run=true` → exit 0.
+
+**Metrics:**
+
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| Dynamics — primary gate on real pairs | passed | val MLP Pearson 0.6031 vs ridge 0.6011 → margin +0.002 | ❌ |
+| Dynamics — uncertainty calibration | Spearman ≥ 0.20 | 0.247 (state_linear) | ✓ |
+| Dynamics — dual checkpointing | wired | model_best_nll.pt + model_best_gate.pt | ✓ |
+| Dynamics — epoch gate tracking | wired | epoch_metrics.json on every training run | ✓ |
+| Dynamics — checkpoint comparison | wired | checkpoint_comparison.json with recommendation | ✓ |
+| Dynamics — hybrid loss | available | lambda_mse_delta=0.0 default (NLL-only unchanged) | ✓ |
+
+**Blockers:** P1 — primary gate still failing; RL training remains blocked.
+
+**Next experiments to run manually (in order):**
+
+1. `state_linear, lr=1e-3, lambda_mse_delta=0.0, selection_metric=val_nll` (confirm dual-checkpoint wiring on real data)
+2. `state_linear, lr=3e-4, lambda_mse_delta=0.0` (LR sweep; check if lower LR improves gate margin)
+3. `state_linear, lr=1e-4, lambda_mse_delta=0.0`
+4. `state_linear, lr=3e-4, lambda_mse_delta=0.05` (hybrid loss: moderate MSE weight)
+5. `state_linear, lr=3e-4, lambda_mse_delta=0.1` (hybrid loss: stronger MSE weight)
+
+After each run: inspect `epoch_metrics.json` for whether margin ever crossed +0.03, and
+`checkpoint_comparison.json` for `recommendation`.  Do **not** lower gate thresholds.
+Do **not** start RL until gate passes.
+
+---
+
+## Session 2026-05-14-1230 (agent: B)
+
+**Phase:** 2 — Dynamics validation gate, architecture-ablation diagnostic.
+
+**Status:** Real OT pairs + real VAE artifacts both present; dynamics gate machinery runs
+end-to-end. Primary gate currently fails on a **single** margin: `margin_vs_linear_ridge_pearson`.
+This session does NOT attempt to make the gate pass — it lays groundwork to diagnose *whether*
+a controlled architectural change can improve the gate without sacrificing OOD or calibration.
+RL stays blocked.
+
+- **Failure profile (default config, real Norman pairs):**
+  - val MLP R² ≈ 0.380 ; val MLP Pearson ≈ 0.595
+  - val ridge R² ≈ 0.383 ; val ridge Pearson ≈ 0.601
+  - margin_vs_linear_ridge_pearson ≈ −0.006 (needs ≥ +0.03)
+  - all four other margins pass; uncertainty Spearman ≈ 0.247 ✓
+  - OOD R² ≈ −0.012 (collapses) ; OOD Pearson ≈ 0.350 (vs ridge OOD R² 0.177, Pearson 0.439)
+  - Random hyperparameter sweeps (lambda_combo, n_layers, dropout, weight_decay, more epochs)
+    do not help. The failure is structural: the nonlinear MLP barely matches a ridge fit on
+    `[z, one_hot(gene)]`.
+
+- **Added (architecture, defaults off):**
+  - `src/models/dynamics.py`: two new constructor flags. Both default `False`, so the model is
+    operationally identical to the previous baseline when unset (verified by 3 invariance tests):
+    - `use_state_linear_skip` — `mu += Linear(z)`; gene-independent.
+    - `use_gene_delta_bias`   — `mu += GeneDelta[gene_idx]`; per-gene additive offset;
+      `gene_delta.weight[0]` zero-initialised (ctrl placeholder).
+  - `config/dynamics.yaml`: same two flags exposed, defaults `false`.
+
+- **Added (diagnostics):**
+  - `src/analysis/metrics.py`:
+    - `_fit_ridge_baseline` / `_predict_ridge_baseline` — single source of truth for the
+      ridge baseline; `dynamics_validation_gate` was refactored to use them, so
+      `gate.json` and `gate_diagnostics.json` are guaranteed to compare against an identical
+      ridge fit (test_ridge_matches_gate_baseline pins this).
+    - `gate_diagnostics(...)` — per-dim and per-gene MLP-vs-ridge breakdown for val (+ OOD
+      when available); reports per-gene Pearson only when N_g ≥ 30.
+  - `config/paths.yaml`: new keys `dynamics_diagnostics`, `dynamics_ablation_dir`,
+    `dynamics_ablation_summary_json`, `dynamics_ablation_summary_csv`.
+  - `scripts/train_dynamics.py` writes `gate_diagnostics.json` after the gate, through
+    `cfg.paths.dynamics_diagnostics` (no hardcoded paths).
+
+- **Added (ablation runner):**
+  - `scripts/run_dynamics_ablation.py` — runs four setups (baseline / state_linear / gene_bias /
+    state_linear_gene_bias) via subprocess + Hydra overrides on `paths.dynamics_dir` + the
+    two flags. Modes: `--dry-run` (print commands, no exec), `--smoke` (max_epochs=3 wiring
+    test), `--only <name>` (single setup). Continue-on-error: a failed gate inside one setup
+    is recorded into `summary.json` but does not abort the runner. Writes
+    `artifacts/dynamics_ablation/summary.{json,csv}` and a conservative `recommendation`
+    block — does NOT mutate `config/dynamics.yaml`, does NOT start RL.
+
+- **Selection logic (`recommend`).** A non-baseline setup is accepted only if it passes the
+  gate OR strictly improves `margin_vs_linear_ridge_pearson`, AND OOD R² / Pearson do not
+  collapse vs baseline (tolerance 0.02), AND uncertainty Spearman ≥ 0.20, AND it does not
+  show the gene-bias-overfit signature (big val gain, no OOD gain). If no setup qualifies,
+  recommendation = `keep_baseline`; rationale is logged and RL remains blocked per PHASES.md
+  Phase 2 fallback.
+
+- **Tests:**
+  - `pytest tests/test_dynamics.py -v` → **21 passed** (added: TestDynamicsFlags ×10 covering
+    all four flag combinations, gene_delta zero-init, param-count deltas, and three
+    baseline-invariance assertions on param count / state_dict keys / forward output).
+  - `pytest tests/test_metrics.py -v` → **41 passed** (added: TestGateDiagnostics ×7 and
+    TestAblationRecommend ×6).
+  - `pytest tests/ -v --no-cov -k "not slow"` → **118 passed, 6 xfail** (up from 95 passed;
+    no regressions).
+  - `python scripts/train_dynamics.py +dry_run=true` → exit 0.
+  - `python scripts/run_dynamics_ablation.py --dry-run` → exit 0; prints four planned commands.
+
+**Metrics:**
+
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| Dynamics — primary gate on real pairs | passed | val MLP Pearson 0.595 vs ridge 0.601 → margin −0.006 | ❌ |
+| Dynamics — uncertainty calibration | Spearman ≥ 0.20 | 0.247 | ✓ |
+| Dynamics — other val margins | pass | no-op / global / per-gene / kNN all pass | ✓ |
+| Dynamics — OOD R² (report-only) | reported | −0.012 (collapse vs ridge 0.177) | reported |
+| Dynamics — diagnostics file | written | gate_diagnostics.json on every run | ✓ |
+| Dynamics — ablation runner | wired | scripts/run_dynamics_ablation.py + --dry-run | ✓ |
+
+**Blockers:** P1 — primary gate still failing; RL training remains blocked. P0 from this
+session: none (no Agent A files touched, no shared interfaces changed).
+
+**Next:**
+
+1. **[Agent B]** Run `python scripts/run_dynamics_ablation.py` (full four-way; ~hours on
+   real Norman pairs). Compare val-vs-OOD by setup. Review
+   `artifacts/dynamics_ablation/summary.json` and the recommendation.
+2. **[Agent B]** If recommendation is `keep_baseline`: do NOT start RL; invoke PHASES.md Phase 2
+   fallback explicitly in a follow-up PROGRESS.md entry (rescope dynamics to mean-Δ + ridge,
+   document limitation, then proceed).
+3. **[Agent B]** If a non-baseline setup is recommended: re-train default with that flag set,
+   confirm gate passes on real pairs + OOD not collapsed, then unblock RL.
+
+---
+
+## Session 2026-05-13-1700 (agent: B)
+
+**Phase:** 2 → 3 — Gate wiring complete + Phase 3 reward implemented.
+
+**Status:** Gate wiring + reward implemented; gate run blocked on real pairs (`make pairs` pending).
+
+- Wired Phase 2 validation gate into `scripts/train_dynamics.py` (Step 10):
+  - Checkpoint-skip branch no longer returns early; sets `skip_training = True` and proceeds to
+    Step 10 so re-runs always evaluate the gate.
+  - Added `_predict_split(model, z_ctrl, gene_idx, *, device, batch_size)` helper — MPS-safe,
+    float32 throughout, mini-batch loop with `.detach().cpu().numpy()` per batch.
+  - Missing `val_pairs.npz` is a hard error (return 1, not silent skip).
+  - Missing `ood_pairs.npz` is a warning + skip (mock pairs don't produce ood split).
+  - OOD report-only: `gate.json["passed"]` reflects val outcome only.
+  - `torch.load(..., map_location="cpu")` + `model.load_state_dict` pattern for MPS safety.
+  - Writes `gate.json`, `val_metrics.json`, and `ood_metrics.json` (OOD only if pairs present).
+  - Returns exit code 1 on val gate failure; logs clear `log.error` message.
+- Implemented `src/rl/reward.py`:
+  - `distance_to_reference(z, z_ref, metric)` — L2 and cosine; cosine zero-vector safe (1.0).
+  - `compute_reward(...)` — full formula per docstring; NO-OP never pays sparsity; uncertainty
+    penalty gated on `lambda_unc > 0.0 and log_var is not None`.
+- Added `tests/test_reward.py` with 18 tests (18/18 pass, 0.67 s).
+- Removed obsolete `TestReward::test_reward_is_stubbed` from `tests/test_environment.py`.
+- Full fast suite: **95 passed, 6 xfailed, 0 failed**.
+
+**Metrics:**
+
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| Dynamics — gate wiring | complete | ✓ wired; runs after every `make dynamics` | ✓ |
+| Dynamics — primary gate on real pairs | passed | blocked on `make pairs` | P1 |
+| RL — reward implemented | ✓ | `distance_to_reference` + `compute_reward` (18 tests) | ✓ |
+| RL — gymnasium env_checker | pass | not started | — |
+
+**Blockers:** P1 — `make pairs` has not completed; `val_pairs.npz` does not exist yet. Gate
+will auto-run as soon as pairs land and `make dynamics` is re-run.
+
+**Next:**
+
+1. **[Agent A]** Complete `make pairs` → `make dynamics` can then run the gate end-to-end.
+2. **[Agent B]** Implement `CellReprogrammingEnv` in `src/rl/environment.py`; flip xfail tests green.
+3. **[Agent B]** Implement `MaskablePPO` training in `src/rl/train_ppo.py`.
+
+---
+
 ## Session 2026-05-13-1600 (agent: A)
 
 **Phase:** 3 — DepMap enrichment + trajectory rendering (Days 7–9). Phase 3 Agent A code complete.

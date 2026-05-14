@@ -347,3 +347,108 @@ class TestDynamicsFlags:
                 "both-flags-False output diverged from the legacy default — "
                 "the no-flag and flags=False code paths must be operationally identical."
             )
+
+
+class TestHybridLoss:
+    """Hybrid loss: NLL + lambda_mse_delta * MSE(mu, target_delta)."""
+
+    def test_lambda_zero_matches_pure_nll(self) -> None:
+        """Adding 0.0 * MSE to NLL must leave the value unchanged."""
+        torch = _torch_or_skip()
+        from src.models.dynamics import heteroscedastic_nll
+
+        B, D   = 8, 32
+        mu     = torch.randn(B, D)
+        lv     = torch.zeros(B, D)
+        target = torch.randn(B, D)
+        nll_only = heteroscedastic_nll(mu, lv, target, log_var_reg=0.0)
+        hybrid   = (
+            heteroscedastic_nll(mu, lv, target, log_var_reg=0.0)
+            + 0.0 * torch.nn.functional.mse_loss(mu, target)
+        )
+        assert torch.equal(nll_only, hybrid), (
+            "lambda=0.0 hybrid loss must equal bare NLL bit-for-bit"
+        )
+
+    def test_lambda_positive_changes_loss(self) -> None:
+        """lambda > 0 with mu ≠ target must strictly increase total loss above NLL."""
+        torch = _torch_or_skip()
+        from src.models.dynamics import heteroscedastic_nll
+
+        B, D   = 8, 32
+        target = torch.zeros(B, D)
+        mu     = torch.ones(B, D)   # clearly far from target
+        lv     = torch.zeros(B, D)
+        lmda   = 0.1
+        nll    = heteroscedastic_nll(mu, lv, target, log_var_reg=0.0)
+        hybrid = nll + lmda * torch.nn.functional.mse_loss(mu, target)
+        assert hybrid.item() > nll.item(), (
+            f"hybrid ({hybrid.item():.4f}) must exceed NLL ({nll.item():.4f}) when mu ≠ target"
+        )
+
+    def test_lambda_positive_pulls_mu_toward_target(self) -> None:
+        """A few gradient steps with the hybrid loss must reduce ||mu − target||²."""
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel, heteroscedastic_nll
+
+        B, D   = 16, 32
+        torch.manual_seed(42)
+        model  = PerturbationDynamicsModel(n_latent=D, n_genes=10)
+        z_ctrl = torch.randn(B, D)
+        g_idx  = torch.randint(1, 11, (B,))
+        target_delta = torch.randn(B, D)
+        opt    = torch.optim.SGD(model.parameters(), lr=0.05)
+        lmda   = 1.0
+
+        errors: list[float] = []
+        for _ in range(6):
+            _, mu, lv = model(z_ctrl, g_idx)
+            loss = (
+                heteroscedastic_nll(mu, lv, target_delta, log_var_reg=0.0)
+                + lmda * torch.nn.functional.mse_loss(mu, target_delta)
+            )
+            errors.append(torch.nn.functional.mse_loss(mu, target_delta).item())
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+        assert errors[-1] < errors[0], (
+            f"Hybrid loss did not reduce ||mu − target||²: {errors[0]:.4f} → {errors[-1]:.4f}"
+        )
+
+
+class TestEpochMetrics:
+    """Per-epoch metric records must be JSON-serializable."""
+
+    def test_epoch_record_json_serializable(self) -> None:
+        import json
+        record = {
+            "epoch":     5,
+            "train_nll": 1.234,
+            "val_nll":   1.189,
+            "val_mlp_r2":                  0.38,
+            "val_mlp_pearson":             0.595,
+            "val_ridge_r2":                0.383,
+            "val_ridge_pearson":           0.601,
+            "val_mlp_minus_ridge_pearson": -0.006,
+            "uncertainty_spearman":        0.247,
+            "margin_checks": {
+                "margin_vs_noop_r2":
+                    {"value": 0.28,   "threshold": 0.10, "pass": True},
+                "margin_vs_global_mean_r2":
+                    {"value": 0.15,   "threshold": 0.05, "pass": True},
+                "margin_vs_per_gene_mean_r2":
+                    {"value": 0.02,   "threshold": 0.0,  "pass": True},
+                "margin_vs_linear_ridge_pearson":
+                    {"value": -0.006, "threshold": 0.03, "pass": False},
+                "margin_vs_knn_r2":
+                    {"value": 0.05,   "threshold": 0.03, "pass": True},
+            },
+            "all_margins_pass": False,
+            "lr": 1e-3,
+        }
+        serialized = json.dumps(record)
+        recovered  = json.loads(serialized)
+        assert recovered["epoch"] == record["epoch"]
+        assert recovered["all_margins_pass"] is False
+        assert abs(recovered["val_mlp_pearson"] - record["val_mlp_pearson"]) < 1e-9

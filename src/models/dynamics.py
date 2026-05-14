@@ -70,6 +70,18 @@ class PerturbationDynamicsModel(nn.Module):
         Lower clamp on predicted log σ² (default -5.0).
     log_var_max
         Upper clamp (default 3.0).
+    use_state_linear_skip
+        If ``True``, adds an extra ``nn.Linear(n_latent, n_latent)`` whose output is added
+        into ``mu``: ``mu += state_linear(z)``. Gene-independent; intended to give the model
+        an explicit linear-in-z scaffold that can generalize across genes (helps OOD when
+        the perturbation effect has a z-dependent linear component the nonlinear trunk is
+        missing). Default ``False`` — preserves baseline behavior.
+    use_gene_delta_bias
+        If ``True``, adds an ``nn.Embedding(n_genes + 1, n_latent)`` whose row for the input
+        gene is added into ``mu``: ``mu += gene_delta(gene_idx)``. This is a per-gene additive
+        offset, functionally equivalent to the "per-gene mean Δ" baseline absorbed into the
+        model. Row 0 is initialized to all-zeros at construction so the ctrl-placeholder
+        index is a true no-op at init. Default ``False``.
 
     Examples
     --------
@@ -94,6 +106,8 @@ class PerturbationDynamicsModel(nn.Module):
         log_var_max: float = 3.0,
         log_var_init_bias: float = -2.0,
         use_layernorm: bool = True,
+        use_state_linear_skip: bool = False,
+        use_gene_delta_bias: bool = False,
     ) -> None:
         super().__init__()
         self.n_latent = n_latent
@@ -101,6 +115,8 @@ class PerturbationDynamicsModel(nn.Module):
         self.d_emb = d_emb
         self.log_var_min = log_var_min
         self.log_var_max = log_var_max
+        self.use_state_linear_skip = bool(use_state_linear_skip)
+        self.use_gene_delta_bias = bool(use_gene_delta_bias)
 
         _act_map = {"silu": nn.SiLU, "relu": nn.ReLU, "gelu": nn.GELU}
         if activation not in _act_map:
@@ -129,6 +145,20 @@ class PerturbationDynamicsModel(nn.Module):
 
         # Initialise log_var bias to avoid early overconfidence
         nn.init.constant_(self.head_log_var.bias, log_var_init_bias)
+
+        # Optional gene-independent linear skip on z (off by default).
+        self.state_linear: nn.Linear | None = (
+            nn.Linear(n_latent, n_latent) if self.use_state_linear_skip else None
+        )
+
+        # Optional per-gene additive bias on mu (off by default).
+        # Index 0 is the ctrl placeholder; zero it out so it contributes nothing at init.
+        self.gene_delta: nn.Embedding | None = (
+            nn.Embedding(n_genes + 1, n_latent) if self.use_gene_delta_bias else None
+        )
+        if self.gene_delta is not None:
+            with torch.no_grad():
+                self.gene_delta.weight[0].zero_()
 
     def forward(
         self,
@@ -160,6 +190,10 @@ class PerturbationDynamicsModel(nn.Module):
         h = self.input_proj(h)                         # (B, n_hidden)
         h = self.trunk(h)                              # (B, n_hidden)
         mu = self.head_mu(h)                           # (B, n_latent)
+        if self.state_linear is not None:
+            mu = mu + self.state_linear(z)             # gene-independent linear skip
+        if self.gene_delta is not None:
+            mu = mu + self.gene_delta(gene_idx)        # per-gene additive offset
         log_var = self.head_log_var(h).clamp(
             self.log_var_min, self.log_var_max
         )                                              # (B, n_latent)

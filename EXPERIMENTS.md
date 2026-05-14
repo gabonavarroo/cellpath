@@ -58,10 +58,14 @@ experiments with Hydra, and the ablation matrix planned for the 14-day budget.
 | `dynamics.log_var_max` | 3.0 | 0–6 | Clamp on log σ² |
 | `dynamics.lambda_combo` | 0.5 | 0.0–1.0 | Weight on composition loss |
 | `dynamics.batch_size` | 256 | 64–1024 | Mini-batch size |
-| `dynamics.lr` | 1e-3 | 1e-4–3e-3 | AdamW learning rate |
+| `dynamics.use_state_linear_skip` | `true` | bool | Gene-independent skip; improves val+OOD (see Phase 2 ablation) |
+| `dynamics.use_gene_delta_bias` | `false` | bool | Per-gene bias; disabled — causes OOD collapse |
+| `dynamics.selection_metric` | `gate_margin` | `val_nll \| gate_margin` | Checkpoint to promote to model.pt |
+| `dynamics.lambda_mse_delta` | 0.0 | 0.0–0.1 | Hybrid NLL+MSE weight; 0.0 = NLL only |
+| `dynamics.lr` | 1e-4 | 1e-4–3e-3 | AdamW learning rate |
 | `dynamics.weight_decay` | 1e-5 | 0–1e-3 | AdamW weight decay |
-| `dynamics.max_epochs` | 100 | 20–300 | Cap |
-| `dynamics.early_stop_patience` | 10 | 5–30 | Early stop on val NLL |
+| `dynamics.max_epochs` | 300 | 20–300 | Cap (increased to accommodate lower LR) |
+| `dynamics.early_stop_patience` | 35 | 5–50 | Early stop on val NLL |
 
 ### 1.5 RL environment + PPO (`config/rl.yaml`)
 
@@ -199,6 +203,7 @@ These are pre-baked override stacks:
 - `baseline.yaml` — all defaults; the first run on Day 0.
 - `vae_ablation.yaml` — runs n_latent ∈ {16, 32, 64} via Hydra multirun.
 - `rl_sparse.yaml` — runs λ_sparse ∈ {0.01, 0.05, 0.1}.
+- `dynamics_legacy_mlp.yaml` — pre-Phase-2-ablation MLP baseline (plain MLP, lr=1e-3, val_nll).
 
 Multirun:
 ```bash
@@ -287,9 +292,54 @@ Any plot in the thesis must be reproducible via `scripts/visualize.py --figure <
 
 ---
 
-## 8. Pointers
+## 8. Phase 2 dynamics experiment results (2026-05-14)
+
+All 9 runs used the same real Norman OT pairs (train/val/ood splits).  Gate threshold:
+`margin_vs_linear_ridge_pearson ≥ 0.03`.  Columns show `best_gate` checkpoint metrics
+(from `checkpoint_comparison.json`) unless noted.  **No run passed the gate.**
+
+| # | Architecture | lr | λ_mse | sel. metric | val Pearson | val MLP−ridge | OOD Pearson | OOD MLP−ridge | unc. Spearman | Gate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | baseline (no skip) | 1e-3 | 0.0 | val_nll | ≈0.603 | +0.002 | ≈0.485 | — | 0.247 | **FAIL** |
+| 2 | state_linear | 1e-3 | 0.0 | val_nll | ≈0.603 | +0.002 | ≈0.485 | — | 0.247 | **FAIL** |
+| 3 | gene_bias | 1e-3 | 0.0 | val_nll | — | — | ≈0.26–0.29 | — | — | **FAIL** (OOD collapse) |
+| 4 | state_linear+gene_bias | 1e-3 | 0.0 | val_nll | — | — | ≈0.26–0.29 | — | — | **FAIL** (OOD collapse) |
+| 5 | state_linear | 1e-3 | 0.0 | gate_margin | ≈0.608 | +0.007 | ≈0.479 | +0.040 | 0.249 | **FAIL** |
+| 6 | state_linear | 3e-4 | 0.0 | gate_margin | ≈0.607 | +0.006 | ≈0.478 | +0.039 | 0.248 | **FAIL** |
+| 7 | state_linear | **1e-4** | 0.0 | gate_margin | **≈0.608** | **+0.007** | **≈0.479** | **+0.040** | **0.249** | **FAIL** ← current default |
+| 8 | state_linear | 3e-4 | 0.05 | gate_margin | ≈0.607 | +0.006 | ≈0.478 | +0.039 | 0.247 | **FAIL** |
+| 9 | state_linear | 3e-4 | 0.1 | gate_margin | ≈0.607 | +0.006 | ≈0.478 | +0.039 | 0.247 | **FAIL** |
+
+**Conclusions:**
+
+- `state_linear` is the best architecture: improves val+OOD vs baseline, no OOD collapse.
+- `gene_bias` (with or without state_linear) causes OOD collapse → permanently rejected.
+- Lower LR (1e-4) produces the best ridge-margin signal (+0.007) without OOD degradation.
+- Hybrid MSE loss (λ=0.05, 0.1) had negligible effect on the ridge-margin metric.
+- The primary blocker is `margin_vs_linear_ridge_pearson` (+0.007 vs +0.030 required).
+- Next diagnostic axis: latent space quality (dim 11 failure mode, OT pair quality, VAE latent).
+
+To reproduce run #7 (current default):
+```bash
+python scripts/train_dynamics.py --config-name default +force=true
+```
+
+To reproduce pre-ablation baseline (run #1) — use CLI overrides referencing values in
+`config/experiments/dynamics_legacy_mlp.yaml`:
+```bash
+python scripts/train_dynamics.py \
+    dynamics.use_state_linear_skip=false dynamics.selection_metric=val_nll \
+    dynamics.lr=1e-3 dynamics.max_epochs=100 dynamics.early_stop_patience=10 \
+    +force=true
+```
+
+---
+
+## 9. Pointers
 
 - `config/` — every hyperparameter listed in §1 has a corresponding YAML entry.
+- `config/experiments/dynamics_legacy_mlp.yaml` — pre-ablation MLP baseline override.
 - `src/analysis/metrics.py` — all metrics referenced in §3.
+- `src/analysis/model_selection.py` — `recommend_checkpoint` decision logic.
 - `scripts/evaluate.py` — runs ablation aggregation.
 - `scripts/visualize.py` — generates the thesis figures listed in §7.

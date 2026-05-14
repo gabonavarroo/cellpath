@@ -1,0 +1,32 @@
+# config/experiments/dynamics_legacy_mlp.yaml — plain MLP baseline (pre-Phase-2 defaults).
+#
+# Restores the dynamics configuration that was the default before the four-way architecture
+# ablation concluded (Phase 2, 2026-05-14).  Use this to reproduce pre-ablation baselines or
+# to compare against the current state_linear defaults.
+#
+# Usage (use CLI overrides — experiment subdirectory configs require @package _global_
+# to work as --config-name targets, which is a known Hydra limitation shared by all
+# configs in this directory):
+#
+#   python scripts/train_dynamics.py \
+#       dynamics.use_state_linear_skip=false \
+#       dynamics.use_gene_delta_bias=false \
+#       dynamics.selection_metric=val_nll \
+#       dynamics.lambda_mse_delta=0.0 \
+#       dynamics.lr=1e-3 \
+#       dynamics.max_epochs=100 \
+#       dynamics.early_stop_patience=10 \
+#       +force=true
+
+defaults:
+  - /default
+  - _self_
+
+dynamics:
+  use_state_linear_skip: false
+  use_gene_delta_bias: false
+  selection_metric: val_nll
+  lambda_mse_delta: 0.0
+  lr: 1e-3
+  max_epochs: 100
+  early_stop_patience: 10

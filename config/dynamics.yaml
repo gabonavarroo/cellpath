@@ -10,6 +10,36 @@ dynamics:
   dropout: 0.1
   use_layernorm: true
 
+  # Architecture ablation flags.
+  # use_state_linear_skip: ENABLED — four-way ablation confirmed this improves both val
+  #   Pearson (≈0.608) and OOD Pearson (≈0.479) over the plain MLP baseline; no OOD collapse.
+  # use_gene_delta_bias: DISABLED — per-gene additive offset caused OOD Pearson collapse
+  #   (≈0.26-0.29 vs 0.479 for state_linear alone); rejected as default.
+  use_state_linear_skip: true         # mu += Linear(z); gene-independent skip
+  use_gene_delta_bias: false          # mu += GeneDelta[gene_idx]; disabled — causes OOD collapse
+
+  # Checkpoint selection.
+  # Allowed values: "val_nll" | "gate_margin".
+  # "val_nll"    — model.pt ← best-NLL checkpoint (conventional, safer).
+  # "gate_margin" — model.pt ← best val_mlp_minus_ridge_pearson checkpoint (Phase 2 target metric).
+  # CURRENT DEFAULT: gate_margin — LR/MSE sweeps confirmed best_gate consistently improves the
+  # blocked ridge-margin metric (+0.007 vs +0.002 for best_nll) without OOD collapse or uncertainty
+  # degradation. Phase 2 gate still fails (+0.007 < +0.030 required); this default maximises the
+  # diagnostic signal without lowering any threshold.
+  # checkpoint_comparison.json is always written so the choice can be audited.
+  selection_metric: gate_margin
+
+  # Optional hybrid loss: total_loss = heteroscedastic_nll + lambda_mse_delta * MSE(mu, Δz).
+  # Default 0.0 — LR/MSE sweeps at lambda=0.05 and lambda=0.1 showed negligible effect on the
+  # ridge-margin metric relative to lambda=0.0.  Uncertainty head and log_var regularisation
+  # are untouched.
+  lambda_mse_delta: 0.0
+
+  # Write per-epoch gate metrics (val Pearson, ridge Pearson, margin checks, uncertainty)
+  # to artifacts/dynamics/epoch_metrics.json.  Adds one dynamics_validation_gate call
+  # per epoch (cheap: ridge fit is <1 s on real Norman pairs).
+  track_epoch_gate_metrics: true
+
   # Heteroscedastic head
   log_var_min: -5.0                   # clamp on predicted log σ²
   log_var_max: 3.0
@@ -21,14 +51,17 @@ dynamics:
   lambda_log_var_reg: 0.01            # mild penalty on |log_var| to discourage extremes
 
   # Optimizer
-  lr: 1e-3
+  # lr: 1e-4 — LR sweep (1e-3, 3e-4, 1e-4) showed 1e-4 improved val Pearson most consistently
+  # for the state_linear architecture.  Increasing max_epochs/patience compensates for slower
+  # convergence.
+  lr: 1e-4
   weight_decay: 1e-5
   batch_size: 256
   optimizer: adamw                    # "adamw" | "adam" | "sgd"
 
   # Schedule
-  max_epochs: 100
-  early_stop_patience: 10
+  max_epochs: 300
+  early_stop_patience: 35
   scheduler: cosine                   # "cosine" | "step" | "none"
   warmup_steps: 500
 

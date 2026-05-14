@@ -432,3 +432,275 @@ class TestDynamicsValidationGate:
         assert r2_pg > 0.8, (
             f"Expected per-gene-mean R²>0.8 when train has matching structure, got {r2_pg}"
         )
+
+
+# ---------------------------------------------------------------------------
+# TestGateDiagnostics
+# ---------------------------------------------------------------------------
+
+
+class TestGateDiagnostics:
+    """gate_diagnostics: shape + JSON-safety + ridge-consistency with the gate."""
+
+    def _val_inputs(self, seed: int = 0):
+        z_ctrl, gene_idx, z_pert = _make_synthetic_pairs(
+            n=200, n_latent=8, n_genes=3, noise=0.05, seed=seed
+        )
+        return z_ctrl, gene_idx, z_pert
+
+    def _train_inputs(self, seed: int = 2):
+        return _make_synthetic_pairs(
+            n=400, n_latent=8, n_genes=3, noise=0.05, seed=seed
+        )
+
+    def test_returns_expected_top_level_keys(self) -> None:
+        from src.analysis.metrics import gate_diagnostics
+
+        z_tr, g_tr, zp_tr = self._train_inputs()
+        z_v,  g_v,  zp_v  = self._val_inputs()
+        out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,
+        )
+        assert set(out.keys()) == {"overall", "per_dim", "worst_dims", "per_gene_val"}
+        assert set(out["overall"].keys()) == {"val", "ood"}
+        assert set(out["per_dim"].keys()) == {"val", "ood"}
+
+    def test_ood_none_when_ood_inputs_missing(self) -> None:
+        from src.analysis.metrics import gate_diagnostics
+
+        z_tr, g_tr, zp_tr = self._train_inputs()
+        z_v,  g_v,  zp_v  = self._val_inputs()
+        out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,
+            z_ctrl_ood=None, gene_idx_ood=None, z_pert_ood=None,
+            z_pert_pred_mlp_ood=None,
+        )
+        assert out["overall"]["ood"] is None
+        assert out["per_dim"]["ood"] is None
+        assert out["worst_dims"]["ood"] == []
+
+    def test_ood_block_populated_when_provided(self) -> None:
+        from src.analysis.metrics import gate_diagnostics
+
+        z_tr, g_tr, zp_tr = self._train_inputs(seed=2)
+        z_v,  g_v,  zp_v  = self._val_inputs(seed=0)
+        z_o,  g_o,  zp_o  = _make_synthetic_pairs(n=100, n_latent=8, n_genes=3, seed=1)
+
+        out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,
+            z_ctrl_ood=z_o, gene_idx_ood=g_o, z_pert_ood=zp_o,
+            z_pert_pred_mlp_ood=zp_o,
+        )
+        assert isinstance(out["overall"]["ood"], dict)
+        assert set(out["overall"]["ood"].keys()) == {
+            "mlp_r2", "mlp_pearson", "ridge_r2", "ridge_pearson",
+            "mlp_minus_ridge_pearson",
+        }
+        assert isinstance(out["per_dim"]["ood"], dict)
+
+    def test_result_is_json_serializable(self) -> None:
+        from src.analysis.metrics import gate_diagnostics
+
+        z_tr, g_tr, zp_tr = self._train_inputs()
+        z_v,  g_v,  zp_v  = self._val_inputs()
+        out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,
+        )
+        json.dumps(out)  # must not raise
+
+    def test_per_gene_val_has_n_and_r2(self) -> None:
+        from src.analysis.metrics import gate_diagnostics
+
+        z_tr, g_tr, zp_tr = self._train_inputs()
+        z_v,  g_v,  zp_v  = self._val_inputs()
+        out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,
+        )
+        assert len(out["per_gene_val"]) == len(np.unique(g_v))
+        for entry in out["per_gene_val"]:
+            assert {"gene_idx", "n", "mlp_r2", "ridge_r2", "mlp_minus_ridge_r2",
+                    "mlp_pearson", "ridge_pearson"} <= set(entry.keys())
+            assert isinstance(entry["n"], int) and entry["n"] >= 1
+
+    def test_perfect_mlp_pred_gives_high_val_pearson(self) -> None:
+        from src.analysis.metrics import gate_diagnostics
+
+        z_tr, g_tr, zp_tr = self._train_inputs()
+        z_v,  g_v,  zp_v  = self._val_inputs()
+        out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,  # perfect prediction
+        )
+        # Perfect MLP prediction → MLP pearson is ~1; MLP - ridge >= 0.
+        assert out["overall"]["val"]["mlp_pearson"] > 0.95
+        assert out["overall"]["val"]["mlp_minus_ridge_pearson"] >= -1e-3
+
+    def test_ridge_matches_gate_baseline(self) -> None:
+        """gate_diagnostics' ridge must match dynamics_validation_gate's ridge exactly."""
+        from src.analysis.metrics import (
+            dynamics_validation_gate,
+            gate_diagnostics,
+        )
+
+        z_tr, g_tr, zp_tr = self._train_inputs()
+        z_v,  g_v,  zp_v  = self._val_inputs()
+        log_var = np.zeros_like(zp_v)
+
+        gate_out = dynamics_validation_gate(
+            z_v, g_v, zp_v, zp_v, log_var,
+            _default_cfg_gate(),
+            baselines_train_data={"z_ctrl": z_tr, "gene_idx": g_tr, "z_pert": zp_tr},
+        )
+        diag_out = gate_diagnostics(
+            z_ctrl_train=z_tr, gene_idx_train=g_tr, z_pert_train=zp_tr,
+            z_ctrl_val=z_v,    gene_idx_val=g_v,    z_pert_val=zp_v,
+            z_pert_pred_mlp_val=zp_v,
+        )
+
+        gate_ridge_pearson = gate_out["primary"]["baselines"]["linear_ridge"]["pearson_r"]
+        diag_ridge_pearson = diag_out["overall"]["val"]["ridge_pearson"]
+        assert gate_ridge_pearson == pytest.approx(diag_ridge_pearson, abs=1e-6), (
+            f"Ridge baseline diverged between gate ({gate_ridge_pearson}) "
+            f"and diagnostics ({diag_ridge_pearson}); they MUST share the same fit."
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestAblationRecommend (selection logic, no training required)
+# ---------------------------------------------------------------------------
+
+
+class TestAblationRecommend:
+    """Selection logic for run_dynamics_ablation.py — pure-Python, no I/O."""
+
+    def _baseline_row(self, **overrides) -> dict:
+        row = {
+            "name": "baseline",
+            "use_state_linear_skip": False, "use_gene_delta_bias": False,
+            "status": "complete", "exit_code": 0, "passed": False,
+            "val_mlp_r2": 0.38, "val_mlp_pearson": 0.595,
+            "val_ridge_pearson": 0.601, "val_ridge_r2": 0.383,
+            "val_mlp_minus_ridge_pearson": -0.006,
+            "uncertainty_spearman": 0.25, "uncertainty_pass": True,
+            "ood_mlp_r2": -0.01, "ood_mlp_pearson": 0.35,
+            "ood_ridge_pearson": 0.44, "ood_ridge_r2": 0.18,
+            "ood_mlp_minus_ridge_pearson": -0.09,
+        }
+        row.update(overrides)
+        return row
+
+    def _alt_row(self, name, **overrides) -> dict:
+        row = self._baseline_row(name=name, use_state_linear_skip=(name != "gene_bias"),
+                                 use_gene_delta_bias=(name != "state_linear"))
+        row.update(overrides)
+        return row
+
+    def test_keep_baseline_when_no_alt_beats(self) -> None:
+        from scripts.run_dynamics_ablation import recommend
+
+        rows = [
+            self._baseline_row(),
+            self._alt_row("state_linear", val_mlp_minus_ridge_pearson=-0.05,
+                          ood_mlp_pearson=0.30, ood_mlp_r2=-0.05),
+            self._alt_row("gene_bias", val_mlp_minus_ridge_pearson=-0.04,
+                          ood_mlp_pearson=0.10, ood_mlp_r2=-0.20),
+            self._alt_row("state_linear_gene_bias", val_mlp_minus_ridge_pearson=-0.03,
+                          ood_mlp_pearson=0.15, ood_mlp_r2=-0.15),
+        ]
+        rec = recommend(rows)
+        assert rec["setup"] == "keep_baseline"
+        assert rec["fallback_invoked"] is True
+
+    def test_state_linear_wins_when_it_improves_margin_without_ood_loss(self) -> None:
+        from scripts.run_dynamics_ablation import recommend
+
+        rows = [
+            self._baseline_row(),
+            self._alt_row("state_linear",
+                          val_mlp_minus_ridge_pearson=0.05,  # now positive
+                          passed=True,
+                          ood_mlp_pearson=0.40, ood_mlp_r2=0.10),
+            self._alt_row("gene_bias",
+                          val_mlp_minus_ridge_pearson=-0.05,
+                          ood_mlp_pearson=0.20, ood_mlp_r2=-0.10),
+            self._alt_row("state_linear_gene_bias",
+                          val_mlp_minus_ridge_pearson=0.03,
+                          ood_mlp_pearson=0.36, ood_mlp_r2=0.05),
+        ]
+        rec = recommend(rows)
+        assert rec["setup"] == "state_linear"
+        assert rec["passed"] is True
+
+    def test_prefer_passed_over_better_margin(self) -> None:
+        """state_linear_gene_bias passes; state_linear improves margin more but doesn't pass."""
+        from scripts.run_dynamics_ablation import recommend
+
+        rows = [
+            self._baseline_row(),
+            self._alt_row("state_linear",
+                          val_mlp_minus_ridge_pearson=0.10, passed=False,
+                          ood_mlp_pearson=0.42, ood_mlp_r2=0.05),
+            self._alt_row("gene_bias",
+                          val_mlp_minus_ridge_pearson=-0.02,
+                          ood_mlp_pearson=0.30, ood_mlp_r2=-0.05),
+            self._alt_row("state_linear_gene_bias",
+                          val_mlp_minus_ridge_pearson=0.05, passed=True,
+                          ood_mlp_pearson=0.42, ood_mlp_r2=0.05),
+        ]
+        rec = recommend(rows)
+        assert rec["setup"] == "state_linear_gene_bias"
+
+    def test_memorization_signature_rejects_gene_bias(self) -> None:
+        """gene_bias gets big val gain but no OOD movement → rejected."""
+        from scripts.run_dynamics_ablation import recommend
+
+        rows = [
+            self._baseline_row(),
+            self._alt_row("state_linear",
+                          val_mlp_minus_ridge_pearson=-0.05,
+                          ood_mlp_pearson=0.34, ood_mlp_r2=-0.02),
+            self._alt_row("gene_bias",
+                          val_mlp_minus_ridge_pearson=0.10,  # big val gain
+                          ood_mlp_pearson=0.35, ood_mlp_r2=-0.01),  # no OOD gain
+            self._alt_row("state_linear_gene_bias",
+                          val_mlp_minus_ridge_pearson=-0.04,
+                          ood_mlp_pearson=0.33, ood_mlp_r2=-0.03),
+        ]
+        rec = recommend(rows)
+        # gene_bias must NOT be selected
+        assert rec["setup"] != "gene_bias"
+
+    def test_uncertainty_floor_rejects(self) -> None:
+        from scripts.run_dynamics_ablation import recommend
+
+        rows = [
+            self._baseline_row(),
+            self._alt_row("state_linear",
+                          val_mlp_minus_ridge_pearson=0.05, passed=True,
+                          ood_mlp_pearson=0.42, ood_mlp_r2=0.05,
+                          uncertainty_spearman=0.10),  # below floor
+        ]
+        rec = recommend(rows)
+        assert rec["setup"] == "keep_baseline"
+        assert "uncertainty" in rec["rationale"].lower() or "no setup" in rec["rationale"].lower()
+
+    def test_incomplete_baseline_falls_back(self) -> None:
+        from scripts.run_dynamics_ablation import recommend
+
+        rows = [
+            self._baseline_row(status="incomplete"),
+        ]
+        rec = recommend(rows)
+        assert rec["setup"] == "keep_baseline"
+        assert rec["fallback_invoked"] is True

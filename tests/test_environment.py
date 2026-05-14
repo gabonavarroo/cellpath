@@ -116,14 +116,3 @@ class TestEnvironmentAPI:
         assert info["action_mask"][1] == False  # noqa: E712
 
 
-class TestReward:
-    def test_reward_is_stubbed(self) -> None:
-        from src.rl.reward import compute_reward
-
-        with pytest.raises(NotImplementedError, match="Agent B"):
-            compute_reward(
-                z_next=np.zeros(32, dtype=np.float32),
-                z_ref=np.zeros(32, dtype=np.float32),
-                action=0,
-                noop_idx=10,
-            )

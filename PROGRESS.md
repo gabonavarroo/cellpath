@@ -6,6 +6,40 @@
 
 ---
 
+## Session 2026-05-13-1600 (agent: A)
+
+**Phase:** 3 — DepMap enrichment + trajectory rendering (Days 7–9). Phase 3 Agent A code complete.
+
+**Status:** All Phase 3 Agent A deliverables implemented.
+
+- Implemented `hypergeometric_enrichment` — scipy.stats.hypergeom one-sided upper-tail; log-odds effect size.
+- Implemented `gsea_preranked` — Subramanian 2005 KS-like running enrichment, |score|^1 weighting, 1000-permutation null, NES normalization.
+- Implemented `null_enrichment_comparison` — size-matched + expression-decile-matched null; z-score and empirical p-value.
+- Implemented `depmap_validation.py`: `load_depmap_k562`, `load_gene_panels`, `run_depmap_enrichment` (hypergeometric + GSEA + null, BH-FDR correction, CSV output).
+- Implemented `trajectory.py`: `load_rollouts` (Contract 4 schema validation), `project_rollouts_to_umap` (reuses fitted UMAP reducer), `plot_trajectories` (success/failure color coding, gold star centroid, direction arrows).
+- Filled `notebooks/01_data_exploration.ipynb` — perturbation counts, HVG distributions, ctrl vs perturbed QC, combo prevalence pie chart.
+- Created `tests/test_analysis.py` with 21 tests covering all three metric functions and depmap/trajectory loaders.
+- Full suite: 78 passed, 6 xfailed, 0 failed ✓
+
+**Metrics:**
+
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| DepMap — code implemented | ✓ | hypergeometric + GSEA + null | ✓ |
+| DepMap — at least one FDR q < 0.05 | yes | pending RL rollouts | blocked on RL |
+| Trajectory rendering — code implemented | ✓ | load + project + plot | ✓ |
+
+**Blockers:** P1 — DepMap enrichment result needs `artifacts/rl/action_freq.json` (Agent B Phase 3).
+Trajectory rendering needs `artifacts/rl/rollouts.parquet` (Agent B Phase 3).
+
+**Next:**
+
+1. **[Agent A]** Run `make pairs` if not done; unblocks Agent B dynamics retraining.
+2. **[Agent B]** Train RL → produce `rollouts.parquet` + `action_freq.json`.
+3. **[Agent A]** Once rollouts exist: run `run_depmap_enrichment` and `plot_trajectories`; verify ≥1 q < 0.05.
+
+---
+
 ## Session 2026-05-13-1500 (agent: B)
 
 **Phase:** 2 — Dynamics Validation Gate machinery (Days 4–6).
@@ -292,8 +326,8 @@ plausibility test). User-confirmed scope:
 - [ ] [B] OOD metrics reported. (blocked on OT pairs)
 
 ### Phase 3 — Days 7–9 (Analysis  ||  RL env + PPO)
-- [ ] [A] `src.analysis.depmap_validation.run_depmap_enrichment` implemented.
-- [ ] [A] Trajectory rendering implemented.
+- [x] [A] `src.analysis.depmap_validation.run_depmap_enrichment` implemented.
+- [x] [A] Trajectory rendering implemented.
 - [ ] [B] `CellReprogrammingEnv` implemented; gymnasium env_checker passes.
 - [ ] [B] NO-OP success semantics correct (tests in `tests/test_environment.py` flipped on).
 - [ ] [B] MaskablePPO training runs without crash; success-rate curve trends up.

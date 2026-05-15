@@ -1,71 +1,32 @@
 """Reward function for ``CellReprogrammingEnv``.
 
-Owner: Agent B. See ARCHITECTURE.md Concept 5.
+Owner: Agent B. See ARCHITECTURE.md Concept 5 and decision D7.
 
-Composition::
+Composition (locked, do NOT change without coordinating with AGENTS.md §4)::
 
-    R(z, a, z', sigma) = − distance(z', z_ref) * λ_dist
-                          − λ_sparse · 1[a ≠ NO_OP]
-                          − λ_unc   · mean(exp(log_var))
-                          + success_bonus · 1[terminal ∧ ||z' − z_ref|| < ε]
-                          − failure_penalty · 1[truncation]
+    R(z, a, z', σ) = − distance(z', z_ref) · λ_dist
+                      − λ_sparse · 𝟙[a ≠ NO_OP]
+                      − λ_unc   · ‖σ‖
+                      + success_bonus · 𝟙[terminal ∧ ‖z' − z_ref‖ < ε]
+                      − failure_penalty · 𝟙[truncation]
 
 The distance term provides dense shaping; the sparsity term encodes the "fewer interventions
 preferred" prior. The uncertainty term (optional, off by default) discourages the agent from
 visiting high-uncertainty regions of the dynamics model.
+
+**NO-OP semantics (sacred, D7):** NO-OP earns no sparsity penalty — it is the "stop" action.
+Without this exemption, the policy would be penalised for the rational choice of stopping,
+which contradicts D7 and the unit tests in tests/test_environment.py.
 """
 
 from __future__ import annotations
 
+import math
+from typing import Any
+
 import numpy as np
 
-
-def distance_to_reference(
-    z: np.ndarray,
-    z_ref: np.ndarray,
-    metric: str = "l2",
-) -> float:
-    """Distance between a latent state and the reference centroid.
-
-    Parameters
-    ----------
-    z
-        Shape ``(n_latent,)``.
-    z_ref
-        Shape ``(n_latent,)``.
-    metric
-        ``"l2"`` (default) or ``"cosine"``.
-
-    Returns
-    -------
-    float
-        Non-negative distance. For cosine, result is in ``[0, 2]``; for L2, ``[0, ∞)``.
-        Zero vectors under cosine return ``1.0`` (maximum uncertainty) rather than NaN.
-
-    Raises
-    ------
-    ValueError
-        If ``metric`` is not ``"l2"`` or ``"cosine"``.
-    """
-    z    = np.asarray(z,    dtype=np.float32)
-    z_ref = np.asarray(z_ref, dtype=np.float32)
-
-    if metric == "l2":
-        return float(np.linalg.norm(z - z_ref))
-
-    if metric == "cosine":
-        norm_z    = float(np.linalg.norm(z))
-        norm_ref  = float(np.linalg.norm(z_ref))
-        if norm_z == 0.0 or norm_ref == 0.0:
-            return 1.0
-        cos_sim = float(np.dot(z, z_ref) / (norm_z * norm_ref))
-        # clamp to [-1, 1] to guard against floating-point drift
-        cos_sim = max(-1.0, min(1.0, cos_sim))
-        return 1.0 - cos_sim
-
-    raise ValueError(
-        f"Unknown distance metric: {metric!r}. Choose 'l2' or 'cosine'."
-    )
+_EPS = 1e-12  # numerical guard for cosine norm denominators
 
 
 def compute_reward(
@@ -90,11 +51,13 @@ def compute_reward(
     Parameters
     ----------
     z_next
-        Post-step latent, shape ``(n_latent,)``.
+        Post-step latent (for non-NO-OP) or current latent (for NO-OP),
+        shape ``(n_latent,)``.
     z_ref
         Reference centroid, shape ``(n_latent,)``.
     action
-        Action taken at this step.
+        Action taken at this step. If ``action == noop_idx``, the sparsity
+        penalty is NOT applied (D7).
     noop_idx
         Index of the NO-OP action.
     log_var
@@ -103,9 +66,9 @@ def compute_reward(
     lambda_sparse, lambda_unc, distance_scale, success_bonus, failure_penalty
         Hyperparameters (see ``config/rl.yaml::reward``).
     terminated
-        True if the episode terminated this step.
+        True if the episode terminated this step (NO-OP or in-step success).
     truncated
-        True if the step budget was reached.
+        True if the step budget was reached without termination.
     is_success
         True if the terminal state is within ε of ``z_ref``.
     distance_metric
@@ -115,27 +78,69 @@ def compute_reward(
     -------
     float
         Scalar reward for this transition.
+    """
+    # --- 1. Dense distance shaping (always applied) -----------------------
+    d = distance_to_reference(z_next, z_ref, metric=distance_metric)
+    reward = -float(distance_scale) * d
+
+    # --- 2. Sparsity penalty (gene actions only, D7) ----------------------
+    if action != noop_idx:
+        reward -= float(lambda_sparse)
+
+    # --- 3. Optional uncertainty penalty ---------------------------------
+    if lambda_unc > 0.0 and log_var is not None:
+        # ‖σ‖ where σ = exp(½ · log_var). Using L2 norm of σ over latent dims.
+        sigma = np.exp(0.5 * np.asarray(log_var, dtype=np.float64))
+        reward -= float(lambda_unc) * float(np.linalg.norm(sigma))
+
+    # --- 4. Terminal bonuses / penalties ---------------------------------
+    if terminated and is_success and success_bonus > 0.0:
+        reward += float(success_bonus)
+    if truncated and failure_penalty > 0.0:
+        reward -= float(failure_penalty)
+
+    return float(reward)
+
+
+def distance_to_reference(
+    z: np.ndarray,
+    z_ref: np.ndarray,
+    metric: str = "l2",
+) -> float:
+    """Distance between a latent state and the reference centroid.
+
+    Parameters
+    ----------
+    z
+        Shape ``(n_latent,)``.
+    z_ref
+        Shape ``(n_latent,)``.
+    metric
+        ``"l2"`` (default — Euclidean) or ``"cosine"`` (in [0, 2]).
+
+    Returns
+    -------
+    float
 
     Notes
     -----
-    NO-OP does not pay the sparsity penalty — it is the "stop" action and should never
-    be penalised for frugality. The uncertainty penalty requires ``lambda_unc > 0`` AND
-    a non-None ``log_var``; both conditions must hold.
+    Cosine guards against zero-norm vectors via a small epsilon; near-zero vectors return a
+    distance of 1.0 (orthogonal-by-convention).
     """
-    d = distance_to_reference(z_next, z_ref, metric=distance_metric)
-    r = -distance_scale * d
+    z = np.asarray(z, dtype=np.float64)
+    z_ref = np.asarray(z_ref, dtype=np.float64)
 
-    if action != noop_idx:
-        r -= lambda_sparse
+    if metric == "l2":
+        return float(np.linalg.norm(z - z_ref))
 
-    if lambda_unc > 0.0 and log_var is not None:
-        var = np.exp(np.asarray(log_var, dtype=np.float64))
-        r -= lambda_unc * float(np.mean(var))
+    if metric == "cosine":
+        nz = np.linalg.norm(z)
+        nr = np.linalg.norm(z_ref)
+        if nz < _EPS or nr < _EPS:
+            return 1.0  # by convention — undefined direction
+        cos_sim = float(np.dot(z, z_ref) / (nz * nr))
+        # Clamp for numerical safety (dot can drift outside [-1, 1] for unit-norm float64).
+        cos_sim = max(-1.0, min(1.0, cos_sim))
+        return 1.0 - cos_sim
 
-    if terminated and is_success:
-        r += success_bonus
-
-    if truncated:
-        r -= failure_penalty
-
-    return float(r)
+    raise ValueError(f"Unknown distance metric: {metric!r}. Use 'l2' or 'cosine'.")

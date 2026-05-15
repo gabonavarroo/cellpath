@@ -67,14 +67,13 @@ def main(cfg: DictConfig) -> int:
 
     if cfg.get("dry_run", False):
         print(f"DRY RUN — would train MaskablePPO for {cfg.rl.ppo.total_timesteps} timesteps")
-        print(f"DRY RUN — n_envs={cfg.rl.ppo.n_envs}, lambda_sparse={cfg.rl.reward.lambda_sparse}")
+        print(f"DRY RUN — n_envs={cfg.rl.env.n_envs}, lambda_sparse={cfg.rl.reward.lambda_sparse}")
         print(f"DRY RUN — would write to {cfg.paths.rl_dir}")
         return 0
 
-    raise NotImplementedError(
-        "Agent B: implement RL training via src.rl.train_ppo.train_ppo(cfg). "
-        "Refuse to start unless _gate_check returns True (already enforced above)."
-    )
+    from src.rl.train_ppo import train_ppo
+    train_ppo(cfg)
+    return 0
 
 
 if __name__ == "__main__":

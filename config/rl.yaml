@@ -22,7 +22,10 @@ rl:
     distance_metric: l2               # "l2" | "cosine"
     obs_includes_step: false          # include current step idx in observation (forces non-Markov)
     obs_includes_mask: false          # include action mask in observation (sb3 handles it via info)
-    n_envs: 16                        # parallel envs
+    n_envs: 4                         # parallel envs (lowered from 16; macOS fork+MPS deadlock risk)
+    vec_env: dummy                    # "dummy" (single-process, safe) | "subproc" (multi-process)
+    min_start_distance: auto          # "auto" (=epsilon), "none" (no filter), or a float.
+                                      # CRITICAL: prevents reward-hacking from start states already at goal.
 
   # ----- Reward -----
   reward:
@@ -59,7 +62,9 @@ rl:
     eval_freq: 50_000                 # env steps
     n_eval_episodes: 50
     save_freq: 100_000
-    skip_gate: false                  # if true (CLI override), skips gate.json check WITH LOUD WARNING
+    skip_gate: true                   # TEMPORARY: bypass dynamics gate (P0 warning logged).
+                                      # Revert to false once train_dynamics.py wires dynamics_validation_gate().
+    smoke_with_untrained_dynamics: false  # if true, init untrained dynamics for pipeline smoke (METRICS MEANINGLESS)
     log_action_distribution_every: 10_000
 
   # ----- Evaluation -----

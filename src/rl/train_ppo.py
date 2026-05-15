@@ -28,15 +28,246 @@ Math summary
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Per-run metadata
+# =============================================================================
+
+
+_METADATA_SCHEMA_VERSION = 1
+
+
+def _sha256_of_file(path: Path, chunk: int = 1 << 20) -> str | None:
+    """Compute the SHA-256 of a file, or return ``None`` if it's missing."""
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return None
+    try:
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            while True:
+                buf = f.read(chunk)
+                if not buf:
+                    break
+                h.update(buf)
+        return h.hexdigest()
+    except OSError as exc:
+        log.warning("Could not hash %s: %s", p, exc)
+        return None
+
+
+def _git_commit() -> str | None:
+    """Return the current HEAD SHA, or ``None`` if not in a git repo / git is unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("git rev-parse HEAD failed: %s", exc)
+    return None
+
+
+def _safe_to_container(node: Any) -> Any:
+    """Convert an OmegaConf node to a plain Python container; pass through otherwise."""
+    try:
+        from omegaconf import OmegaConf
+
+        if OmegaConf.is_config(node):
+            return OmegaConf.to_container(node, resolve=True)
+    except Exception:  # noqa: BLE001
+        pass
+    return node
+
+
+def _read_gate_status(cfg: Any) -> tuple[bool | None, bool | None]:
+    """Best-effort read of ``gate.json`` — returns ``(passed, overridden)``.
+
+    Both fields may be ``None`` if the gate file is missing or unreadable.
+    ``overridden`` is derived from ``cfg.rl.train.skip_gate`` and the presence of the
+    ``"override"`` key written by :func:`check_dynamics_gate` when ``skip=True``.
+    """
+    gate_path = Path(cfg.paths.dynamics_gate) if hasattr(cfg.paths, "dynamics_gate") else None
+    passed: bool | None = None
+    if gate_path is not None and gate_path.exists():
+        try:
+            with open(gate_path) as f:
+                blob = json.load(f)
+            passed = bool(blob.get("passed", False))
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Could not parse %s: %s", gate_path, exc)
+
+    overridden = None
+    try:
+        overridden = bool(cfg.rl.train.get("skip_gate", False))
+    except Exception:  # noqa: BLE001
+        pass
+    return passed, overridden
+
+
+def _read_dynamics_arch_flags(cfg: Any) -> dict[str, Any]:
+    """Read dynamics architecture flags from saved config.json (preferred) or cfg.dynamics."""
+    out: dict[str, Any] = {}
+    cfg_path = Path(cfg.paths.dynamics_config) if hasattr(cfg.paths, "dynamics_config") else None
+    if cfg_path is not None and cfg_path.exists():
+        try:
+            with open(cfg_path) as f:
+                dyn_blob = json.load(f)
+            out["use_state_linear_skip"] = bool(dyn_blob.get("use_state_linear_skip", False))
+            out["use_gene_delta_bias"] = bool(dyn_blob.get("use_gene_delta_bias", False))
+            out["n_latent"] = int(dyn_blob.get("n_latent", -1))
+            out["n_hidden"] = int(dyn_blob.get("n_hidden", -1))
+            out["n_layers"] = int(dyn_blob.get("n_layers", -1))
+            out["d_emb"] = int(dyn_blob.get("d_emb", -1))
+            return out
+        except (json.JSONDecodeError, OSError) as exc:
+            log.warning("Could not parse %s: %s", cfg_path, exc)
+    # Fall back to live cfg
+    try:
+        out["use_state_linear_skip"] = bool(cfg.dynamics.get("use_state_linear_skip", False))
+        out["use_gene_delta_bias"] = bool(cfg.dynamics.get("use_gene_delta_bias", False))
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _write_run_metadata(
+    cfg: Any,
+    out_dir: str | Path,
+    *,
+    deterministic: bool | None = None,
+    n_episodes: int | None = None,
+    extras: dict[str, Any] | None = None,
+) -> Path:
+    """Write a ``metadata.json`` capturing the full provenance of an RL run.
+
+    Robust to missing files (gate.json, epsilon_success.json, .git, dynamics config). The
+    intent is that every PPO train run and every PPO eval / random-policy eval produces a
+    self-contained record that can be cited next to its numbers.
+
+    Parameters
+    ----------
+    cfg
+        Hydra config (after any open_dict overrides — the snapshot taken here is what was
+        actually used).
+    out_dir
+        Directory the metadata is written into. Created if needed.
+    deterministic, n_episodes
+        Eval flags. ``None`` for training-only runs (e.g. ``train_ppo()`` itself).
+    extras
+        Additional free-form fields merged at the top level (e.g. ``{"policy_kind": "uniform_valid"}``
+        for the random-policy script). Wins over auto-derived fields on key collision.
+
+    Returns
+    -------
+    Path
+        The full path to the written ``metadata.json``.
+    """
+    from src.rl.environment import resolve_epsilon
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Epsilon provenance
+    try:
+        epsilon_value, epsilon_source = resolve_epsilon(cfg)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not resolve epsilon for metadata: %s", exc)
+        epsilon_value, epsilon_source = None, None
+
+    # Epsilon percentile from the canonical JSON (independent of override; helps comparisons)
+    epsilon_percentile_json = None
+    try:
+        with open(cfg.paths.vae_epsilon_success_json) as f:
+            epsilon_percentile_json = json.load(f).get("percentile")
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    gate_passed, gate_overridden = _read_gate_status(cfg)
+    dyn_arch = _read_dynamics_arch_flags(cfg)
+
+    # Dynamics checkpoint
+    dyn_ckpt = (
+        str(cfg.paths.dynamics_model) if hasattr(cfg.paths, "dynamics_model") else None
+    )
+    dyn_sha = _sha256_of_file(Path(dyn_ckpt)) if dyn_ckpt else None
+
+    # Policy path
+    policy_path = (
+        str(cfg.paths.rl_ppo_zip) if hasattr(cfg.paths, "rl_ppo_zip") else None
+    )
+
+    # VAE
+    vae_n_latent = None
+    try:
+        vae_n_latent = int(cfg.vae.n_latent)
+    except Exception:  # noqa: BLE001
+        pass
+    vae_dir = str(cfg.paths.vae_dir) if hasattr(cfg.paths, "vae_dir") else None
+
+    # min_start_distance — preserve the string form ("auto" / "none") faithfully
+    try:
+        min_start_distance = cfg.rl.env.get("min_start_distance", "auto")
+        # OmegaConf may give us a non-JSON-safe wrapper; coerce
+        if not isinstance(min_start_distance, (str, int, float, type(None))):
+            min_start_distance = str(min_start_distance)
+    except Exception:  # noqa: BLE001
+        min_start_distance = None
+
+    meta: dict[str, Any] = {
+        "schema_version": _METADATA_SCHEMA_VERSION,
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "git_commit": _git_commit(),
+        "seed": int(cfg.get("seed", 42)) if hasattr(cfg, "get") else None,
+        "epsilon_value": epsilon_value,
+        "epsilon_source": epsilon_source,
+        "epsilon_percentile_json": epsilon_percentile_json,
+        "min_start_distance": min_start_distance,
+        "max_steps": int(cfg.rl.env.max_steps) if hasattr(cfg.rl.env, "max_steps") else None,
+        "vae_n_latent": vae_n_latent,
+        "vae_dir": vae_dir,
+        "dynamics_checkpoint": dyn_ckpt,
+        "dynamics_checkpoint_sha256": dyn_sha,
+        "dynamics_gate_passed": gate_passed,
+        "dynamics_gate_overridden": gate_overridden,
+        "dynamics_arch": dyn_arch,
+        "ppo_hparams": _safe_to_container(getattr(cfg.rl, "ppo", None)),
+        "reward_hparams": _safe_to_container(getattr(cfg.rl, "reward", None)),
+        "reward_mode": "absolute_distance",  # only mode implemented in P0
+        "deterministic_eval": deterministic,
+        "n_episodes": n_episodes,
+        "policy_path": policy_path,
+        "notes": None,
+    }
+
+    if extras:
+        # Caller wins on key collision (intentional: lets the random-policy script overwrite
+        # policy_path with "random_policy" or similar).
+        meta.update(extras)
+
+    out_path = out_dir / "metadata.json"
+    with open(out_path, "w") as f:
+        json.dump(meta, f, indent=2, default=str)
+    log.info("Wrote metadata → %s", out_path)
+    return out_path
 
 
 def check_dynamics_gate(gate_path: str | Path, skip: bool = False) -> dict[str, Any]:
@@ -239,6 +470,27 @@ def train_ppo(cfg: Any) -> Any:
         "Final eval: success_rate=%.3f  mean_steps=%.2f  mean_reward=%.3f",
         metrics["success_rate"], metrics["mean_steps"], metrics["mean_reward"],
     )
+
+    # Per-run provenance — written next to ppo.zip / rollouts.parquet.
+    try:
+        _write_run_metadata(
+            cfg,
+            rl_dir,
+            deterministic=bool(cfg.rl.eval.deterministic),
+            n_episodes=int(cfg.rl.eval.n_rollout_episodes),
+            extras={
+                "stage": "train_ppo",
+                "training_total_timesteps": int(cfg.rl.ppo.total_timesteps),
+                "training_elapsed_sec": float(elapsed),
+                "final_eval_metrics": {
+                    "success_rate": metrics["success_rate"],
+                    "mean_steps": metrics["mean_steps"],
+                    "mean_reward": metrics["mean_reward"],
+                },
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not write run metadata: %s", exc)
 
     vec_env.close()
     eval_env.close()

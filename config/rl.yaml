@@ -26,6 +26,12 @@ rl:
     vec_env: dummy                    # "dummy" (single-process, safe) | "subproc" (multi-process)
     min_start_distance: auto          # "auto" (=epsilon), "none" (no filter), or a float.
                                       # CRITICAL: prevents reward-hacking from start states already at goal.
+    epsilon_override: null            # null → read artifacts/vae/epsilon_success.json (canonical).
+                                      # float → override the success threshold for this run only
+                                      # (e.g. compute a p50/p95 with src.models.vae.compute_epsilon_success
+                                      #  once, then pass +rl.env.epsilon_override=<that float>).
+                                      # The override is recorded in per-run metadata.json so
+                                      # provenance is preserved; the canonical JSON is NOT mutated.
 
   # ----- Reward -----
   reward:

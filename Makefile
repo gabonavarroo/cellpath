@@ -8,7 +8,8 @@ DOCKER ?= docker
 .DEFAULT_GOAL := help
 
 .PHONY: help setup data vae pairs dynamics rl evaluate pipeline test lint format \
-        docker-build docker-cpu docker-cuda tensorboard clean nuke notebooks
+        docker-build docker-cpu docker-cuda tensorboard clean nuke notebooks \
+        rl-eval rl-random rl-summary
 
 help:  ## Show this help message.
 	@grep -E '^[a-zA-Z_-]+:.*?##' Makefile | awk -F':.*?## ' '{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -54,6 +55,23 @@ evaluate:  ## Run full evaluation suite (DepMap enrichment, latent metrics, traj
 
 pipeline:  ## End-to-end pipeline: data → vae → dynamics → rl → evaluate.
 	$(PYTHON) -m src.pipeline run --config-name $(CONFIG)
+
+# ---------------------------------------------------------------------------
+# RL evaluation utilities (need EXTRA= for paths / overrides).
+# Each writes metadata.json + rollouts.parquet + action_freq.json into its out_dir.
+# ---------------------------------------------------------------------------
+
+EXTRA ?=
+
+rl-eval:  ## Evaluate an existing PPO checkpoint (det + stoch). Pass EXTRA="+eval_rl.ppo_path=... +eval_rl.out_dir=...".
+	$(PYTHON) scripts/evaluate_rl.py --config-name $(CONFIG) rl.train.skip_gate=true $(EXTRA)
+
+rl-random:  ## Run a random-policy baseline matched to PPO eval env. EXTRA= must include +random_policy.out_dir=...
+	$(PYTHON) scripts/run_random_policy.py --config-name $(CONFIG) rl.train.skip_gate=true $(EXTRA)
+
+rl-summary:  ## Summarize an RL run dir. Usage: make rl-summary RUN_DIR=path/to/eval_deterministic [RAND_DIR=...].
+	@if [ -z "$(RUN_DIR)" ]; then echo "ERROR: set RUN_DIR=<path>"; exit 2; fi
+	$(PYTHON) scripts/summarize_rl_run.py --run-dir $(RUN_DIR) $(if $(RAND_DIR),--random-baseline-dir $(RAND_DIR))
 
 # ---------------------------------------------------------------------------
 # Quality

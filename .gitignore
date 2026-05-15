@@ -222,4 +222,6 @@ __marimo__/
 # CellPath runtime directories (populated at runtime, not checked in)
 /data/
 /artifacts/
+/artifacts_64/
+/logs/
 /outputs/

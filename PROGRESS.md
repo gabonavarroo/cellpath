@@ -6,6 +6,21 @@
 
 ---
 
+## Session 2026-05-15 — 64D VAE/dynamics ablation
+
+**Status:** 64D VAE branch completed under `artifacts_64/` and dynamics trained. 64D does not pass the Phase 2 gate.
+
+**Metrics:**
+| Metric | 32D | 64D |
+|---|---:|---:|
+| Val R² | 0.3954 | 0.4012 |
+| Val Pearson | 0.6085 | 0.5965 |
+| MLP-ridge Pearson margin | +0.0074 | -0.0191 |
+| OOD Pearson | 0.479 | 0.3686 |
+| Uncertainty Spearman | 0.249 | 0.804 |
+
+**Interpretation:** 64D improves uncertainty calibration but worsens the blocked ridge-margin metric and OOD generalization. The bottleneck is unlikely to be solved by latent dimensionality alone. Keep 32D as primary MVP; use 64D as an ablation. Next step is contraction diagnostics and state_linear analysis.
+
 ## Session 2026-05-14-1800 (agent: B)
 
 **Phase:** 2 — Promote best dynamics candidate as default; document Phase 2 status.

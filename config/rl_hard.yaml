@@ -1,0 +1,60 @@
+# config/rl_hard.yaml — hard-start RL experiment.
+#
+# Composes the standard default stack (paths + vae + dynamics + rl) and then overrides:
+#   - rl.env.min_start_distance: 8.0  (vs "auto"=epsilon=4.52 in default)
+#   - paths.rl_* → artifacts/rl_hard/  (keeps easy-start results untouched)
+#
+# Purpose: with default min_start_distance=epsilon, ~all perturbed cells are near z_ref
+# and the dynamics' regression-to-mean pull is sufficient to "succeed" in one step (~99.8%
+# success_rate). This isn't real gene selection — it's geometry. By raising the threshold to
+# 8.0 we restrict the start pool to cells that genuinely need multi-step steering
+# (eligible pool drops to ~124 cells; first-action pull of ~3.3 is no longer enough alone).
+#
+# Run with:
+#   make rl CONFIG=rl_hard          (or)
+#   python scripts/train_rl.py --config-name rl_hard
+
+defaults:
+  - paths
+  - vae
+  - dynamics
+  - rl
+  - _self_
+
+seed: 42
+
+device:
+  force: null
+
+# --- the actual experiment lever ---
+rl:
+  env:
+    min_start_distance: 8.0          # was "auto" (=epsilon) in default
+
+# --- redirect output to artifacts/rl_hard/ so easy-start results stay intact ---
+paths:
+  rl_dir:                ${paths.artifacts}/rl_hard
+  rl_ppo_zip:            ${paths.artifacts}/rl_hard/ppo.zip
+  rl_rollouts_parquet:   ${paths.artifacts}/rl_hard/rollouts.parquet
+  rl_success_curves_png: ${paths.artifacts}/rl_hard/success_curves.png
+  rl_action_freq_json:   ${paths.artifacts}/rl_hard/action_freq.json
+
+# --- logging knobs (Hydra requires these from the master config) ---
+log:
+  level: INFO
+  tensorboard_dir: ${paths.artifacts}/tensorboard
+  use_wandb: false
+  wandb_project: cellpath
+  wandb_entity: null
+  rich_traceback: true
+  log_every_n_steps: 50
+
+# --- Hydra runtime overrides ---
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}_rl_hard
+  sweep:
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false

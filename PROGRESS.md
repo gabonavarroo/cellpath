@@ -6,7 +6,58 @@
 
 ---
 
+## Session 2026-05-15 — Contraction diagnostics
+
+**Status:** P0B contraction diagnostic implemented and run across 32D/64D dynamics branches.
+
+**Metrics:**
+| Run | Fraction improved | Mean improvement | Median | Worst | n_pairs |
+|---|---:|---:|---:|---:|---:|
+| 32D start8 | 1.0000 | 2.7373 | 2.7314 | 0.5972 | 11760 |
+| 32D auto | 0.9554 | 1.0076 | 1.0152 | -1.8639 | 105000 |
+| 64D start8 | 1.0000 | 3.2823 | 3.3423 | 0.9457 | 5775 |
+| 64D auto | 0.9842 | 1.3485 | 1.3563 | -1.4989 | 105000 |
+| 64D baseline_plain start8 | 1.0000 | 3.0975 | 3.1635 | 0.8077 | 5775 |
+
+**Interpretation:** The learned dynamics field is globally contractive across viable models. The artifact is not only caused by `state_linear`, since the 64D baseline/plain MLP is also fully contractive under the hard start8 setting. 64D is more contractive than 32D and does not improve the dynamics gate. Keep 32D as the primary MVP branch.
+
+**Next:** Add diagnostic aggregation script comparing contraction diagnostics with PPO action frequencies, then move to Phase 5 evaluate/visualize.
+
+## Session 2026-05-15 — P0A RL evaluation infrastructure
+
+**Phase:** 3/5 — RL evaluation provenance and matched baselines.
+
+**Status:** P0A complete. Formal RL evaluation scripts now produce deterministic/stochastic PPO evals, matched random baseline, summaries, and metadata.json. Existing best 32D PPO policy re-scored under p50/start8 without mutating epsilon_success.json.
+
+**Metrics:**
+| Evaluation | Success | Failures | Mean steps | Mean final distance | NO-OP first rate |
+|---|---:|---:|---:|---:|---:|
+| PPO deterministic | 0.988 | 6/500 | 2.28 | 3.029 | 0.012 |
+| PPO stochastic | 0.988 | 6/500 | 2.29 | 3.037 | 0.012 |
+| Random uniform-valid | 0.840 | 80/500 | 5.53 | 3.411 | 0.008 |
+
+**Interpretation:** PPO improves over random by +14.8 percentage points under the matched p50/start8 setting, reaches the target in fewer steps, and ends closer to z_ref. Deterministic and stochastic results are nearly identical, suggesting stable policy behavior.
+
+**Caveat:** Dynamics gate remains failed and overridden. Result validates the learned-control loop, not biological reprogramming.
+
+**Next:** Implement contraction diagnostic and run on 32D, 64D, and 64D architecture variants.
+
 ## Session 2026-05-15 — 64D VAE/dynamics ablation
+
+## 64D dynamics ablation result
+
+64D VAE + dynamics variants were trained under `artifacts_64/`.
+
+| Variant | Val Pearson | MLP-ridge margin | OOD Pearson | OOD margin | Status |
+|---|---:|---:|---:|---:|---|
+| 32D state_linear primary | 0.6085 | +0.0074 | ~0.479 | +0.040 | keep primary |
+| 64D state_linear | 0.5965 | -0.0191 | 0.3686 | -0.0989 | reject |
+| 64D baseline_plain | 0.5958 | -0.0197 | 0.3859 | -0.0817 | reject |
+| 64D gene_bias | 0.5157 | -0.0999 | 0.1191 | -0.3484 | reject |
+| 64D state_linear_gene_bias | 0.5617 | -0.0538 | 0.1053 | -0.3623 | reject |
+
+Interpretation: 64D improves uncertainty calibration but worsens ridge margin and OOD generalization. Removing state_linear does not rescue 64D. Keep 32D as the primary MVP branch. Next bottleneck: contraction diagnostics and pair/dynamics geometry.
+
 
 **Status:** 64D VAE branch completed under `artifacts_64/` and dynamics trained. 64D does not pass the Phase 2 gate.
 

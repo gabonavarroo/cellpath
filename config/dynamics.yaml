@@ -34,6 +34,7 @@ dynamics:
   # ridge-margin metric relative to lambda=0.0.  Uncertainty head and log_var regularisation
   # are untouched.
   lambda_mse_delta: 0.0
+  lambda_corr: 0.0              # per-dim Pearson correlation loss weight; 0 = disabled
 
   # Write per-epoch gate metrics (val Pearson, ridge Pearson, margin checks, uncertainty)
   # to artifacts/dynamics/epoch_metrics.json.  Adds one dynamics_validation_gate call

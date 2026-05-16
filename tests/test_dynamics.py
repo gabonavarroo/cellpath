@@ -464,3 +464,54 @@ class TestEpochMetrics:
         assert recovered["epoch"] == record["epoch"]
         assert recovered["all_margins_pass"] is False
         assert abs(recovered["val_mlp_pearson"] - record["val_mlp_pearson"]) < 1e-9
+
+
+class TestCorrelationLoss:
+    """Tests for src.analysis.metrics.correlation_loss."""
+
+    def test_perfect_correlation_gives_zero(self) -> None:
+        """When pred == target, every per-dim corr is 1.0, so loss should be ~0."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        torch.manual_seed(0)
+        B, D   = 32, 16
+        target = torch.randn(B, D)
+        loss   = correlation_loss(target, target)
+        assert loss.item() < 1e-4, f"perfect correlation loss should be ~0, got {loss.item()}"
+
+    def test_anti_correlation_gives_near_two(self) -> None:
+        """When pred == -target (anti-correlated), each per-dim corr is -1.0, loss ≈ 2."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        torch.manual_seed(1)
+        B, D   = 64, 8
+        target = torch.randn(B, D)
+        loss   = correlation_loss(-target, target)
+        assert loss.item() > 1.9, f"anti-correlation loss should be ≈2, got {loss.item()}"
+
+    def test_zero_variance_dim_excluded(self) -> None:
+        """A dimension with constant target must be excluded (no NaN/Inf)."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        B, D   = 16, 4
+        target = torch.randn(B, D)
+        target[:, 2] = 5.0       # constant column → zero variance → should be excluded
+        pred   = torch.randn(B, D)
+        loss   = correlation_loss(pred, target)
+        assert torch.isfinite(loss), f"loss must be finite even with zero-var dim, got {loss.item()}"
+
+    def test_output_is_finite_scalar(self) -> None:
+        """Random inputs should always produce a finite scalar."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        torch.manual_seed(42)
+        B, D   = 128, 32
+        pred   = torch.randn(B, D)
+        target = torch.randn(B, D)
+        loss   = correlation_loss(pred, target)
+        assert loss.ndim == 0, "output must be a scalar (0-dim tensor)"
+        assert torch.isfinite(loss), f"loss must be finite for random inputs, got {loss.item()}"

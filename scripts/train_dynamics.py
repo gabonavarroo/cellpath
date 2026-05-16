@@ -435,6 +435,7 @@ def main(cfg: DictConfig) -> int:
         lambda_combo      = float(cfg.dynamics.lambda_combo)
         lambda_lv_reg     = float(cfg.dynamics.lambda_log_var_reg)
         lambda_mse_delta  = float(cfg.dynamics.get("lambda_mse_delta", 0.0))
+        lambda_corr       = float(cfg.dynamics.get("lambda_corr", 0.0))
         track_epoch_gate  = bool(cfg.dynamics.get("track_epoch_gate_metrics", True))
         selection_metric  = str(cfg.dynamics.get("selection_metric", "val_nll")).lower()
         max_epochs        = int(cfg.dynamics.max_epochs)
@@ -458,6 +459,11 @@ def main(cfg: DictConfig) -> int:
             log.info(
                 "Hybrid loss enabled: total_loss = NLL + %.4f × MSE(μ, Δz)",
                 lambda_mse_delta,
+            )
+        if lambda_corr > 0.0:
+            log.info(
+                "Correlation loss enabled: total_loss += %.4f × corr_loss(μ, Δz)",
+                lambda_corr,
             )
         if track_epoch_gate:
             log.info(
@@ -492,6 +498,9 @@ def main(cfg: DictConfig) -> int:
                 loss             = loss_nll
                 if lambda_mse_delta > 0.0:
                     loss = loss + lambda_mse_delta * F.mse_loss(mu, target_delta)
+                if lambda_corr > 0.0:
+                    from src.analysis.metrics import correlation_loss as _corr_loss
+                    loss = loss + lambda_corr * _corr_loss(mu, target_delta)
                 batch_combo_loss = 0.0
 
                 if combo_iter is not None and lambda_combo > 0.0:

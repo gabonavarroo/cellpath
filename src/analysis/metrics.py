@@ -1160,3 +1160,56 @@ def null_enrichment_comparison(
         "null_mean":  null_mean,
         "null_std":   null_std,
     }
+
+
+def correlation_loss(
+    pred: "torch.Tensor",
+    target: "torch.Tensor",
+    *,
+    eps: float = 1e-7,
+    min_var: float = 1e-6,
+) -> "torch.Tensor":
+    """Per-dimension Pearson correlation loss: mean_d(1 - corr(pred_d, target_d)).
+
+    Computes Pearson r independently for each latent dimension d, then averages
+    (1 - r) over dimensions whose target variance in the minibatch exceeds min_var.
+    Dimensions with near-zero target variance are excluded to avoid NaN gradients on
+    constant slices (e.g. a padding dimension).
+
+    Use case: penalise the dynamics MLP for failing to capture per-dimension gene
+    effects. Adding lambda_corr * correlation_loss(mu, target_delta) encourages the
+    MLP to rank perturbation effects correctly within each dimension even when the
+    heteroscedastic NLL loss is already low.
+
+    Mathematical definition::
+
+        corr_d = cov(pred_d, target_d) / (std(pred_d) * std(target_d))
+        L_corr = mean_{d : Var(target_d) > min_var} (1 - clamp(corr_d, -1+eps, 1-eps))
+
+    Args:
+        pred:    Predicted values, shape (B, D). Typically mu (predicted delta).
+        target:  Ground-truth values, shape (B, D). Typically target_delta = z_pert - z_ctrl.
+        eps:     Clamp margin; keeps (1 - corr) in [eps, 2-eps] for stable gradients.
+        min_var: Minimum target variance for a dimension to be included.
+
+    Returns:
+        Scalar loss tensor on the same device as ``pred``.
+    """
+    import torch
+
+    pred_c   = pred   - pred.mean(dim=0, keepdim=True)    # (B, D)
+    target_c = target - target.mean(dim=0, keepdim=True)  # (B, D)
+
+    target_var = target_c.var(dim=0)                       # (D,)
+    active     = target_var > min_var                      # (D,) bool mask
+
+    if not active.any():
+        return torch.zeros((), device=pred.device, dtype=pred.dtype)
+
+    num   = (pred_c[:, active] * target_c[:, active]).mean(dim=0)          # (D_active,)
+    denom = (
+        pred_c[:, active].std(dim=0, correction=0).clamp(min=eps)
+        * target_c[:, active].std(dim=0, correction=0).clamp(min=eps)
+    )
+    corr  = (num / denom).clamp(-1.0 + eps, 1.0 - eps)                    # (D_active,)
+    return (1.0 - corr).mean()

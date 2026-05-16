@@ -1,3 +1,4 @@
+# @package _global_
 # config/experiments/dynamics_legacy_mlp.yaml — plain MLP baseline (pre-Phase-2 defaults).
 #
 # Restores the dynamics configuration that was the default before the four-way architecture

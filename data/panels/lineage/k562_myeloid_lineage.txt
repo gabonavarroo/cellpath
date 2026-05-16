@@ -1,0 +1,11 @@
+# Project-curated hematopoietic/myeloid lineage plausibility panel.
+SPI1
+CEBPA
+CEBPB
+CEBPE
+IRF1
+ETS2
+RUNX1
+GFI1
+CSF1R
+MPO

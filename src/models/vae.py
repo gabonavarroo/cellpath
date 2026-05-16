@@ -7,8 +7,9 @@ Sacred rules:
 - Save uses the official scVI API (``model.save()``). Manual state_dict saves are
   forbidden (CLAUDE.md rule #1, ARCHITECTURE.md D14).
 - ``z_reference_centroid`` is the mean of the NT-control latents — the RL reward target.
-- ``epsilon_success`` is data-driven: the 90th percentile of
-  ``||z_ctrl_i − z_ref||_2`` across all control cells.
+- ``epsilon_success`` is data-driven. V1 intentionally uses the p50 control-cell
+  distance threshold because that is the threshold used for the best RL result;
+  p90 may be retained as a named reference artifact, not the canonical V1 value.
 """
 
 from __future__ import annotations
@@ -203,17 +204,17 @@ def compute_z_reference_centroid(adata: Any, latent_key: str = "X_scVI") -> np.n
 def compute_epsilon_success(
     Z_ctrl: Any,
     z_ref: Any,
-    percentile: float = 90.0,
+    percentile: float = 50.0,
 ) -> dict[str, Any]:
     """Data-driven RL success threshold.
 
     ε = percentile(||z_ctrl_i − z_ref||₂, p)
 
-    Using the 90th percentile of the control distance distribution means: a
-    perturbed cell is considered "successfully steered" if its latent is closer
-    to the unperturbed centroid than 90% of the actual unperturbed cells. This
-    calibrates the threshold to the geometry of the learned latent space rather
-    than to an arbitrary Euclidean constant (ARCHITECTURE.md D8).
+    V1 uses p50 as the canonical success threshold because the reported best RL
+    result used that stricter median-control threshold. This calibrates the
+    threshold to the geometry of the learned latent space rather than to an
+    arbitrary Euclidean constant (ARCHITECTURE.md D8). p90 remains useful as a
+    named reference/provenance artifact, but is not the V1 canonical threshold.
 
     Parameters
     ----------
@@ -222,7 +223,7 @@ def compute_epsilon_success(
     z_ref
         Reference centroid, shape ``(n_latent,)``.
     percentile
-        Percentile to use (default 90; 80/95/99 supported as ablations).
+        Percentile to use (default 50 for V1; p90 supported as reference provenance).
 
     Returns
     -------

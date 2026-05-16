@@ -33,13 +33,13 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import hydra
+import numpy as np
 from omegaconf import DictConfig
-
 
 log = logging.getLogger(__name__)
 
@@ -151,7 +151,10 @@ def run_depmap_enrichment_stage(
     default if the aggregator wasn't run.
     """
     from src.analysis.depmap_validation import (
-        load_depmap_k562, load_gene_panels, run_depmap_enrichment,
+        load_depmap_k562,
+        load_gene_panel_manifest,
+        load_gene_panels,
+        run_depmap_enrichment,
     )
 
     repo_root = Path(cfg.paths.root)
@@ -198,12 +201,39 @@ def run_depmap_enrichment_stage(
     adata = ad.read_h5ad(str(latents_path))
     background_genes = [str(g) for g in adata.var_names]
     log.info("Background HVG universe: %d genes", len(background_genes))
+    expression_mean_per_gene: dict[str, float] | None = None
+    try:
+        x_mean = adata.X.mean(axis=0)
+        means = np.asarray(x_mean).ravel()
+        if means.shape[0] == len(background_genes):
+            expression_mean_per_gene = {
+                gene: float(value) for gene, value in zip(background_genes, means, strict=True)
+                if np.isfinite(float(value))
+            }
+            log.info(
+                "Expression-matched null available for %d/%d background genes.",
+                len(expression_mean_per_gene),
+                len(background_genes),
+            )
+        else:
+            log.warning(
+                "Expression mean shape mismatch (%s vs %d genes); using size-matched null.",
+                means.shape,
+                len(background_genes),
+            )
+    except Exception as exc:  # pragma: no cover - depends on backed/sparse AnnData variants
+        log.warning("Could not derive expression means from latents.h5ad: %s", exc)
 
     log.info("Loading DepMap K562 chronos from %s", depmap_path)
     chronos_df = load_depmap_k562(depmap_path)
 
     panel_dir = _resolve_path(settings["panel_dir"], repo_root)
     panels = load_gene_panels(panel_dir) if panel_dir is not None else {}
+    panel_sources = (
+        load_gene_panel_manifest(panel_dir, required_collections=("hallmark", "lineage"))
+        if panel_dir is not None
+        else {}
+    )
     log.info("Loaded %d curated gene panels from %s",
              len(panels), panel_dir if panel_dir else "(none)")
 
@@ -217,13 +247,15 @@ def run_depmap_enrichment_stage(
         chronos_df=chronos_df,
         top_k=settings["top_k"],
         n_null=settings["n_null"],
-        expression_mean_per_gene=None,
+        expression_mean_per_gene=expression_mean_per_gene,
+        panel_sources=panel_sources,
         out_path=out_csv,
     )
     if df is None or len(df) == 0:
         log.warning("DepMap enrichment produced no rows.")
     else:
-        n_sig = int((df["q_value"] < 0.05).sum())
+        q_vals = [q for q in df["q_value"].to_list() if q is not None]
+        n_sig = int(sum(float(q) < 0.05 for q in q_vals))
         log.info("DepMap enrichment: %d rows, %d with q < 0.05", len(df), n_sig)
     return out_csv if out_csv.exists() else None
 
@@ -347,12 +379,6 @@ def run_depmap_comparison_stage(
 @hydra.main(version_base=None, config_path="../config", config_name="default")
 def main(cfg: DictConfig) -> int:
     """Hydra entry point."""
-    from src.utils.device import device_summary
-    from src.utils.seeding import set_seed
-
-    set_seed(int(cfg.get("seed", 42)))
-    print(device_summary())
-
     settings = _resolve_evaluate_settings(cfg)
     repo_root = Path(cfg.paths.root) if hasattr(cfg.paths, "root") else Path.cwd()
     out_dir = Path(cfg.paths.eval_dir) if hasattr(cfg.paths, "eval_dir") else (repo_root / "artifacts" / "eval")
@@ -370,6 +396,12 @@ def main(cfg: DictConfig) -> int:
         print(f"  panel_dir            = {settings['panel_dir']}")
         return 0
 
+    from src.utils.device import device_summary
+    from src.utils.seeding import set_seed
+
+    set_seed(int(cfg.get("seed", 42)))
+    print(device_summary())
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     summary_path: Path | None = None
@@ -386,7 +418,7 @@ def main(cfg: DictConfig) -> int:
         log.info("=== Stage 2/4: latent quality ===")
         try:
             latent_quality_path = run_latent_quality(cfg, out_dir)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("Latent quality stage failed (%s) — continuing.", exc)
 
     depmap_csv_path: Path | None = None
@@ -394,7 +426,7 @@ def main(cfg: DictConfig) -> int:
         log.info("=== Stage 3/4: DepMap enrichment ===")
         try:
             depmap_csv_path = run_depmap_enrichment_stage(cfg, settings, out_dir, summary_blob)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("DepMap stage failed (%s) — continuing.", exc)
 
     depmap_compare_paths: dict[str, Path | None] = {}
@@ -402,12 +434,12 @@ def main(cfg: DictConfig) -> int:
         log.info("=== Stage 4/4: DepMap gene-score comparison ===")
         try:
             depmap_compare_paths = run_depmap_comparison_stage(cfg, settings, out_dir)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("DepMap comparison stage failed (%s) — continuing.", exc)
 
     # Composite index — points to everything the visualizer will consume.
     report = {
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "timestamp_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "out_dir": str(out_dir),
         "summary_json": str(summary_path) if summary_path is not None else None,
         "results_table_md": str(out_dir / "results_table.md") if (out_dir / "results_table.md").exists() else None,

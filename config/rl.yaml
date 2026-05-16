@@ -12,7 +12,9 @@ rl:
   # ----- Reference state -----
   reference:
     source: unperturbed_k562          # "unperturbed_k562" (v1) | "external_healthy" (future)
-    epsilon_percentile: 90            # data-driven ε from ||z_ctrl - z_ref|| distribution
+    epsilon_percentile: 50            # V1 canonical ε from ||z_ctrl - z_ref|| distribution.
+                                      # p50 is intentional for the reported RL run; keep
+                                      # p90 only as named reference provenance.
 
   # ----- Environment dynamics -----
   env:
@@ -26,7 +28,7 @@ rl:
     vec_env: dummy                    # "dummy" (single-process, safe) | "subproc" (multi-process)
     min_start_distance: auto          # "auto" (=epsilon), "none" (no filter), or a float.
                                       # CRITICAL: prevents reward-hacking from start states already at goal.
-    epsilon_override: null            # null → read artifacts/vae/epsilon_success.json (canonical).
+    epsilon_override: null            # null → read artifacts/vae/epsilon_success.json (V1 p50 canonical).
                                       # float → override the success threshold for this run only
                                       # (e.g. compute a p50/p95 with src.models.vae.compute_epsilon_success
                                       #  once, then pass +rl.env.epsilon_override=<that float>).

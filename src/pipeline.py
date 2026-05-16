@@ -45,6 +45,8 @@ log = logging.getLogger(__name__)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+_FORCE_OPTION = typer.Option(None, "--force", help="Step name(s) to force re-run")
+_SKIP_OPTION = typer.Option(None, "--skip", help="Step name(s) to skip")
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +103,11 @@ def step_data(cfg: Any, force: bool = False) -> Path:
 
 def _hydra_overrides_from_cfg(cfg: Any) -> list[str]:
     """Pass-through the config_name through ``--config-name`` plus paths.root."""
-    return [f"paths.root={str(_REPO_ROOT)}"]
+    try:
+        config_name = str(cfg.get("_config_name", "default"))
+    except AttributeError:
+        config_name = "default"
+    return ["--config-name", config_name, f"paths.root={_REPO_ROOT!s}"]
 
 
 def step_vae(cfg: Any, force: bool = False) -> Path:
@@ -110,7 +116,7 @@ def step_vae(cfg: Any, force: bool = False) -> Path:
     if not force and _artifact_exists(target):
         log.info("[pipeline] skip vae (exists: %s)", target)
         return target
-    rc = _run_script("train_vae.py", ["--config-name", "default", *_hydra_overrides_from_cfg(cfg)])
+    rc = _run_script("train_vae.py", _hydra_overrides_from_cfg(cfg))
     if rc != 0:
         raise RuntimeError(f"train_vae.py exited {rc}")
     return target
@@ -122,7 +128,7 @@ def step_pairs(cfg: Any, force: bool = False) -> Path:
     if not force and _artifact_exists(target):
         log.info("[pipeline] skip pairs (exists: %s)", target)
         return target
-    rc = _run_script("build_pairs.py", ["--config-name", "default", *_hydra_overrides_from_cfg(cfg)])
+    rc = _run_script("build_pairs.py", _hydra_overrides_from_cfg(cfg))
     if rc != 0:
         raise RuntimeError(f"build_pairs.py exited {rc}")
     return target
@@ -134,7 +140,7 @@ def step_dynamics(cfg: Any, force: bool = False) -> Path:
     if not force and _artifact_exists(target):
         log.info("[pipeline] skip dynamics (exists: %s)", target)
         return target
-    rc = _run_script("train_dynamics.py", ["--config-name", "default", *_hydra_overrides_from_cfg(cfg)])
+    rc = _run_script("train_dynamics.py", _hydra_overrides_from_cfg(cfg))
     if rc != 0:
         raise RuntimeError(f"train_dynamics.py exited {rc}")
     return target
@@ -149,7 +155,7 @@ def step_rl(cfg: Any, force: bool = False) -> Path:
     if not force and _artifact_exists(target):
         log.info("[pipeline] skip rl (exists: %s)", target)
         return target
-    rc = _run_script("train_rl.py", ["--config-name", "default", *_hydra_overrides_from_cfg(cfg)])
+    rc = _run_script("train_rl.py", _hydra_overrides_from_cfg(cfg))
     if rc != 0:
         raise RuntimeError(f"train_rl.py exited {rc}")
     return target
@@ -165,13 +171,13 @@ def step_evaluate(cfg: Any, force: bool = False) -> Path:
     eval_dir = Path(cfg.paths.eval_dir)
     rc = _run_script(
         "evaluate.py",
-        ["--config-name", "default", "rl.train.skip_gate=true", *_hydra_overrides_from_cfg(cfg)],
+        [*_hydra_overrides_from_cfg(cfg), "rl.train.skip_gate=true"],
     )
     if rc != 0:
         raise RuntimeError(f"evaluate.py exited {rc}")
     rc = _run_script(
         "visualize.py",
-        ["--config-name", "default", "rl.train.skip_gate=true", *_hydra_overrides_from_cfg(cfg)],
+        [*_hydra_overrides_from_cfg(cfg), "rl.train.skip_gate=true"],
     )
     if rc != 0:
         raise RuntimeError(f"visualize.py exited {rc}")
@@ -206,8 +212,8 @@ def _callback() -> None:
 def run(
     config_name: str = typer.Option("default", "--config-name", help="Hydra config name"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Validate config, exit before compute"),
-    force: list[str] = typer.Option([], "--force", help="Step name(s) to force re-run"),
-    skip: list[str] = typer.Option([], "--skip", help="Step name(s) to skip"),
+    force: list[str] | None = _FORCE_OPTION,
+    skip: list[str] | None = _SKIP_OPTION,
     from_step: str = typer.Option("", "--from", help="Resume from this step (skip earlier steps)"),
 ) -> None:
     """Run the full pipeline.
@@ -225,20 +231,20 @@ def run(
         python -m src.pipeline run --config-name default --from evaluate
     """
     from hydra import compose, initialize_config_dir
-    from src.utils.device import device_summary
-    from src.utils.seeding import set_seed
+    from omegaconf import open_dict
 
     config_dir = _REPO_ROOT / "config"
     os.environ.setdefault("CELLPATH_ROOT", str(_REPO_ROOT))
+    force = force or []
+    skip = skip or []
 
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
         cfg = compose(
             config_name=config_name,
-            overrides=[f"paths.root={str(_REPO_ROOT)}"],
+            overrides=[f"paths.root={_REPO_ROOT!s}"],
         )
-
-    set_seed(int(cfg.seed))
-    print(device_summary())
+    with open_dict(cfg):
+        cfg._config_name = config_name
 
     # Resolve which steps to run after honoring --from / --skip
     if from_step:
@@ -270,6 +276,12 @@ def run(
             print(f"  {label} {step}")
         print("DRY RUN — config validated OK. Exiting.")
         return
+
+    from src.utils.device import device_summary
+    from src.utils.seeding import set_seed
+
+    set_seed(int(cfg.seed))
+    print(device_summary())
 
     for step_name in plan:
         log.info("[pipeline] running %s...", step_name)

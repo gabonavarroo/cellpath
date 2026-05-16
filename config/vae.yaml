@@ -38,4 +38,4 @@ vae:
   save_overwrite: true                # model.save(..., overwrite=true)
   compute_z_reference: true           # write z_reference_centroid.npy after training
   compute_epsilon_success: true       # write epsilon_success.json after training
-  epsilon_percentile: 90              # default percentile for ε (overridden by rl.reference)
+  epsilon_percentile: 50              # V1 canonical ε percentile; p90 is reference provenance only

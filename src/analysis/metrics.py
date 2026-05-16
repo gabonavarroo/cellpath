@@ -18,7 +18,6 @@ from typing import Any
 
 import numpy as np
 
-
 # =============================================================================
 # Dynamics-model metrics (Agent B — Phase 2)
 # =============================================================================
@@ -133,7 +132,7 @@ def _predict_ridge_baseline(
 def predictive_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Coefficient of determination R² across all latent dims pooled.
 
-    R² = 1 − (sum_squared_residual / total_sum_squares).
+    R2 = 1 - (sum_squared_residual / total_sum_squares).
 
     Follows sklearn semantics for the degenerate case: if total_sum_squares == 0
     (constant ``y_true``), returns 1.0 when predictions match exactly, else 0.0.
@@ -146,7 +145,7 @@ def predictive_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     Returns
     -------
     float
-        R² ∈ (−∞, 1]. 0 means "no better than predicting the mean"; 1 is perfect.
+        R2 in (-inf, 1]. 0 means "no better than predicting the mean"; 1 is perfect.
     """
     yt = np.asarray(y_true, dtype=np.float64).ravel()
     yp = np.asarray(y_pred, dtype=np.float64).ravel()
@@ -192,22 +191,22 @@ def uncertainty_calibration_spearman(
 ) -> float:
     """Spearman correlation between predicted variance and observed squared error.
 
-    Computes Spearman ρ between exp(log_var_pred) and squared_error over all
+    Computes Spearman rho between exp(log_var_pred) and squared_error over all
     flattened elements. Good dynamics models have higher predicted variance where
-    errors are large. Threshold ≥ 0.2 is required to pass the validation gate
+    errors are large. Threshold >= 0.2 is required to pass the validation gate
     (see ``config/dynamics.yaml::gate``).
 
     Parameters
     ----------
     log_var_pred
-        Predicted log σ², shape ``(N, n_latent)``.
+        Predicted log variance, shape ``(N, n_latent)``.
     squared_error
-        Observed (Δz_true − Δz_pred)², shape ``(N, n_latent)``.
+        Observed squared error, shape ``(N, n_latent)``.
 
     Returns
     -------
     float
-        Spearman ρ ∈ [−1, 1] over flattened arrays. Constant inputs → 0.0.
+        Spearman rho in [-1, 1] over flattened arrays. Constant inputs -> 0.0.
     """
     from scipy.stats import spearmanr
 
@@ -610,8 +609,8 @@ def silhouette_perturbation(
 
     Informational diagnostic only — not a hard gate. Vanilla unsupervised scVI does not
     optimize for perturbation-cluster separation (no label supervision), so values in the
-    range [−0.1, 0.05] are expected and do not indicate model failure. The meaningful Phase 1
-    gate is ε_success ∈ (0.1, 10). See PHASES.md Phase 2 note for full justification.
+    range [-0.1, 0.05] are expected and do not indicate model failure. The meaningful Phase 1
+    gate is epsilon_success in (0.1, 10). See PHASES.md Phase 2 note for full justification.
 
     Parameters
     ----------
@@ -659,7 +658,7 @@ def ari_on_perturbation_clusters(
 ) -> float:
     """Adjusted Rand Index of a KMeans clustering vs ground-truth perturbation labels.
 
-    ARI ∈ [−0.5, 1]. 0 = random; 1 = perfect. Values > 0.1 indicate meaningful recovery.
+    ARI in [-0.5, 1]. 0 = random; 1 = perfect. Values > 0.1 indicate meaningful recovery.
     MiniBatchKMeans is used for speed; subsample to ``sample_size`` for tractability.
 
     Parameters
@@ -682,7 +681,7 @@ def ari_on_perturbation_clusters(
     labels = np.asarray(labels)
 
     if n_clusters is None:
-        n_clusters = int(len(np.unique(labels)))
+        n_clusters = len(np.unique(labels))
 
     if len(Z) > sample_size:
         rng = np.random.default_rng(42)
@@ -701,7 +700,11 @@ def ari_on_perturbation_clusters(
 
 
 def success_rate(rollouts: Any) -> float:
-    """Fraction of episodes that ended with ``info["success"] == True``.
+    """Fraction of episodes that ended with terminal ``success == True``.
+
+    Episodes are grouped by ``episode_id``. Only rows where ``terminated`` is true are
+    considered terminal. Episodes with no terminal row, null success, or terminal
+    ``success=False`` count as failures.
 
     Parameters
     ----------
@@ -712,16 +715,20 @@ def success_rate(rollouts: Any) -> float:
     -------
     float
 
-    Raises
-    ------
-    NotImplementedError
-        Agent B: implement. Group by ``episode_id``, check terminal ``success``.
     """
-    raise NotImplementedError("Agent B: group by episode_id, take terminal success.")
+    episodes = _rollout_episode_summaries(rollouts)
+    if not episodes:
+        return 0.0
+    successes = sum(1 for ep in episodes if ep["success"])
+    return float(successes / len(episodes))
 
 
 def mean_steps_to_success(rollouts: Any) -> float:
-    """Average episode length conditional on success.
+    """Average row-count length conditional on terminal success.
+
+    The step count is the number of rollout rows up to and including the successful
+    terminal row, so it is independent of whether the stored ``step`` column is
+    zero-based or one-based. Returns NaN when there are no successful episodes.
 
     Parameters
     ----------
@@ -732,12 +739,58 @@ def mean_steps_to_success(rollouts: Any) -> float:
     -------
     float
 
-    Raises
-    ------
-    NotImplementedError
-        Agent B: implement.
     """
-    raise NotImplementedError("Agent B: filter to successful episodes; mean(step + 1).")
+    episodes = _rollout_episode_summaries(rollouts)
+    lengths = [ep["terminal_row_count"] for ep in episodes if ep["success"]]
+    if not lengths:
+        return float("nan")
+    return float(np.mean(lengths))
+
+
+def _rollout_episode_summaries(rollouts: Any) -> list[dict[str, Any]]:
+    """Normalize pandas/polars Contract-4 rollouts to per-episode terminal summaries."""
+    required = {"episode_id", "step", "terminated", "success"}
+    columns = set(getattr(rollouts, "columns", []))
+    missing = required - columns
+    if missing:
+        raise ValueError(f"rollouts missing required columns: {sorted(missing)}")
+
+    height = getattr(rollouts, "height", None)
+    if height is None:
+        height = len(rollouts)
+    if int(height) == 0:
+        return []
+
+    module = rollouts.__class__.__module__
+    if module.startswith("polars"):
+        rows = rollouts.sort(["episode_id", "step"]).to_dicts()
+    elif module.startswith("pandas"):
+        rows = rollouts.sort_values(["episode_id", "step"]).to_dict("records")
+    else:
+        raise TypeError("rollouts must be a pandas or polars DataFrame.")
+
+    episodes: dict[Any, list[dict[str, Any]]] = {}
+    for row in rows:
+        episodes.setdefault(row["episode_id"], []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for ep_rows in episodes.values():
+        terminal_pos: int | None = None
+        terminal_success = False
+        for i, row in enumerate(ep_rows):
+            if bool(row.get("terminated", False)):
+                terminal_pos = i
+                success_value = row.get("success")
+                if success_value is None or (isinstance(success_value, float) and np.isnan(success_value)):
+                    terminal_success = False
+                else:
+                    terminal_success = bool(success_value)
+                break
+        out.append({
+            "success": terminal_success,
+            "terminal_row_count": (terminal_pos + 1) if terminal_pos is not None else len(ep_rows),
+        })
+    return out
 
 
 # =============================================================================
@@ -813,8 +866,8 @@ def gsea_preranked(
        ``+|score_i|^p / sum_hit`` when gene i is in the set and
        ``-1 / sum_miss`` otherwise (p=1 weighting).
     3. ES = maximum deviation from zero of the running sum.
-    4. Permutation null: shuffle gene labels 1 000× and recompute ES each time.
-    5. NES = ES / mean(|null_ES|); p = fraction of |null_ES| ≥ |ES|.
+    4. Permutation null: shuffle gene labels 1,000 times and recompute ES each time.
+    5. NES = ES / mean(|null_ES|); p = fraction of |null_ES| >= |ES|.
 
     Parameters
     ----------
@@ -894,6 +947,7 @@ def null_enrichment_comparison(
     background: list[str],
     n_null_samples: int = 1_000,
     match_expression: np.ndarray | None = None,
+    gene_set: list[str] | None = None,
     seed: int = 42,
 ) -> dict[str, Any]:
     """Compare observed enrichment to random gene sets of matched size (+ optional expression).
@@ -916,6 +970,9 @@ def null_enrichment_comparison(
         Number of random matched sets.
     match_expression
         Optional per-gene mean expression aligned to ``background``.
+    gene_set
+        Reference gene set for the null statistic. When omitted, falls back to
+        ``selected_genes`` for backward-compatible synthetic tests.
     seed
         RNG seed.
 
@@ -927,6 +984,7 @@ def null_enrichment_comparison(
     rng  = np.random.default_rng(seed)
     bg   = list(background)
     n    = min(len(selected_genes), len(bg))
+    ref_gene_set = list(gene_set) if gene_set is not None else list(selected_genes)
 
     null_stats: list[float] = []
 
@@ -952,16 +1010,17 @@ def null_enrichment_comparison(
                 candidates = np.where(bg_bins == b)[0]
                 drawn = rng.choice(candidates, size=min(cnt, len(candidates)), replace=False)
                 null_set.extend(bg[i] for i in drawn)
-            # Compute hypergeometric log-odds of this null set vs background
-            # (we recycle the same gene_set = selected_genes as the reference — proxy for enrichment)
-            null_stats.append(float(len(set(null_set) & sel_set)) / max(len(null_set), 1))
+            null_stats.append(
+                float(hypergeometric_enrichment(null_set, ref_gene_set, bg)["log_odds"])
+            )
     else:
         # Size-matched: uniform random sampling
         bg_arr = np.array(bg)
-        sel_set = set(selected_genes)
         for _ in range(n_null_samples):
             null_genes = rng.choice(bg_arr, size=n, replace=False).tolist()
-            null_stats.append(float(len(set(null_genes) & sel_set)) / max(n, 1))
+            null_stats.append(
+                float(hypergeometric_enrichment(null_genes, ref_gene_set, bg)["log_odds"])
+            )
 
     null_arr  = np.array(null_stats, dtype=np.float64)
     null_mean = float(null_arr.mean())

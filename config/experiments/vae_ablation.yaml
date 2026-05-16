@@ -1,3 +1,4 @@
+# @package _global_
 # config/experiments/vae_ablation.yaml — ablate n_latent ∈ {16, 32, 64}.
 #
 # Run as multirun:

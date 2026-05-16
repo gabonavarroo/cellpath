@@ -6,6 +6,38 @@
 
 ---
 
+## Session 2026-05-16-0347  (agent: research-lead)
+
+**Phase:** P0B″ — soft-OT (barycentric) pairing; gate-closing test
+**Status:** Implemented `pair_soft_ot` in `src/data/perturbation_pairs.py` (entropic OT plan column-normalized → `Tᵀ @ z_ctrl` barycentric pseudo-controls). Refactored `_pair_with_fallback` to return paired control *vectors* directly (preserves Contract-2 schema; hard methods unchanged in behavior). Built `artifacts_v2/pairs_soft_ot/` and trained `artifacts_v2/dynamics_soft_ot_default/` with V1-default architecture, pinned hyperparameters, no correlation loss, no residual-over-ridge. **Gate PASSED.** No PPO retrain, no VAE retrain, no metric/threshold changes. V1 frozen artifacts SHA-verified byte-identical (`artifacts/pairs/metadata.json` SHA = `b0080fcdef...`). `git status -- artifacts/ artifacts_64/` clean.
+
+**Metrics (soft_ot vs prior runs):**
+| Component | Target | V1 OT | mean_delta | **soft_ot** | random |
+| --- | --- | --- | --- | --- | --- |
+| val_mlp_minus_ridge_pearson | ≥ +0.030 | +0.0074 | +0.0214 | **+0.0413 ✓** | −0.0094 |
+| val_mlp_pearson | (high) | 0.564 | 0.519 | **0.934** | 0.723 |
+| uncertainty_spearman | ≥ 0.20 | 0.249 | 0.221 | **0.243 ✓** | 0.312 |
+| pairing_noise_median | (drop from 0.8935) | 0.8935 | 0.8493 | **0.7829** | 0.9495 |
+| ood_mlp_pearson | ≥ 0.40 (secondary) | 0.490 | 0.383 | **0.743 ✓** | 0.638 |
+| ood_mlp_minus_ridge_pearson | (secondary) | +0.040 | +0.112 | **+0.003** | −0.041 |
+| dim 11 val margin | strictly > V1 −0.124 | −0.124 | −0.063 | −0.2015 ↓ | −0.089 |
+| dim 11 ood margin | strictly > V1 −0.433 | −0.433 | −0.253 | −0.7391 ↓↓ | −0.483 |
+| gate_passed | true | False | False | **True** | False |
+
+**Verdict:** **Decision Rule A (PASS) with OOD-margin caveat.** Soft-OT closes the gate cleanly on the primary val metric: margin `+0.0413` is `5.6×` V1's `+0.0074` and `1.9×` mean_delta's `+0.0214`. All five `margin_checks` pass. Pairing-noise median drops from `0.8935 → 0.7829` (`Δ=−0.111`), the largest single-step improvement of the pairing sweep, and val gate margin grows monotonically with the noise-ratio drop across all four methods (random < OT < mean_delta < soft_ot). The MLP's *advantage over ridge on OOD* collapses to `+0.003` — ridge is now competitive on the smoother barycentric OOD targets — but the absolute OOD MLP Pearson `0.7434` is healthy (well above the `0.40` secondary check) and OOD uncertainty Spearman `0.2564` is fine. The collapse is concentrated on dim 11: MLP Pearson on dim 11 OOD drops to `0.0045` (vs ridge `0.7437`). Most other dims still have MLP ≳ ridge on OOD. Soft-OT semantically replaces "observed control cell" with "barycentric pseudo-control" — this is honest and noted in the interpretation, not a violation of Contract 2.
+
+**Blockers:** none.
+**Next:**
+1. Rerun the V2 hard benchmark (`scripts/evaluate_rl_hard.py`) on `artifacts_v2/dynamics_soft_ot_default/` using the **existing V1 PPO** (no PPO retrain). Goal: measure PPO−greedy_dyn_1 collinearity on the new dynamics field. **Deferred — requires explicit approval per the P0B″ prompt.**
+2. Do **not** retrain PPO or VAE. Do **not** run correlation-loss sweep (gate closed without it).
+3. Optional future P0B‴: ablate soft_ot ± correlation loss `λ_corr ∈ {0.05, 0.10, 0.30}` to test whether dim-11 OOD signal can be recovered. Not blocking.
+
+**Artifacts (all under `artifacts_v2/`):** `pairs_soft_ot/` (4 npz files, 38958 train pairs, schema-validated), `dynamics_soft_ot_default/` (full output tree, gate.json `passed=True`, model.pt @ epoch 58, gate_status=preferred), `diagnostics/pairing_noise_soft_ot.{json,md}`, `diagnostics/gate_breakdown_soft_ot/`, `diagnostics/pairing_comparison_p0b_doubleprime.{json,md}` (4-way comparator), `interpretation_p0b_doubleprime.md`. New code/tests: `tests/test_p0b_doubleprime_pairing.py` (5 tests; 4 unit + 1 schema regression — all pass). Modified: `src/data/perturbation_pairs.py` (added `pair_soft_ot`, refactored `_pair_with_fallback` to return vectors, extended `Literal` and module docstring).
+
+**Test suite:** 226 passed, 2 skipped (was 221+2 before; +5 from `test_p0b_doubleprime_pairing.py`). All pre-existing pairing/data/gate tests unaffected by the refactor.
+
+---
+
 ## Session 2026-05-16-0310  (agent: research-lead)
 
 **Phase:** P0B′ — pairing correction (V2 reorder, executed)

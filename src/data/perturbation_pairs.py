@@ -8,10 +8,14 @@ Perturb-seq is cross-sectional: we never observe the same cell pre- and post-per
 For each perturbation ``p`` we have a control population and a perturbed population, and we
 *construct* training triples ``(z_ctrl_i, p, z_pert_i)`` via a pseudo-pairing strategy.
 
-Three strategies are supported:
+Four strategies are supported:
 - ``ot``         : entropic optimal transport (CellOT, Bunne et al. 2023). Default.
 - ``random``     : random within-perturbation pairing. Fallback when OT is too slow.
 - ``mean_delta`` : pair ``z_pert_j`` with the control cell closest to ``z_pert_j − Δ̄p``.
+- ``soft_ot``    : barycentric pseudo-controls — each ``z_ctrl_j`` row is the column-
+  normalised expectation ``T[:, j]ᵀ @ z_ctrl`` under the entropic OT plan. These are
+  NOT observed single-cell controls; they are convex combinations chosen to minimise
+  the within-gene residual variance of the dynamics target.
 
 A mock generator (:func:`generate_mock_pairs`) produces synthetic pairs matching the contract
 schema so Agent B can train dynamics on Day 0 without waiting for the real data.
@@ -37,16 +41,39 @@ def _pair_with_fallback(
     ot_iter: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    """Apply pairing method; fall back to mean_delta on OT failure (DATA.md §4.1)."""
+    """Apply pairing method; fall back to mean_delta on OT failure (DATA.md §4.1).
+
+    Returns
+    -------
+    np.ndarray
+        Paired control vectors of shape ``(N_pert, d)`` float32. For ``ot``,
+        ``mean_delta``, and ``random`` these are observed single-cell controls
+        (i.e. rows of ``z_ctrl``). For ``soft_ot`` they are barycentric
+        pseudo-controls (convex combinations of ``z_ctrl`` rows under the OT plan).
+    """
+    z_ctrl_f = np.asarray(z_ctrl, dtype=np.float32)
     if method == "ot":
         try:
-            return pair_ot(z_ctrl, z_pert, epsilon=ot_epsilon, max_iter=ot_iter)
+            idx = pair_ot(z_ctrl, z_pert, epsilon=ot_epsilon, max_iter=ot_iter)
+            return z_ctrl_f[idx]
         except RuntimeError as exc:
             log.warning("OT failed — falling back to mean_delta. Reason: %s", exc)
-            return pair_mean_delta(z_ctrl, z_pert)
+            idx = pair_mean_delta(z_ctrl, z_pert)
+            return z_ctrl_f[idx]
+    if method == "soft_ot":
+        try:
+            return pair_soft_ot(z_ctrl, z_pert, epsilon=ot_epsilon, max_iter=ot_iter)
+        except RuntimeError as exc:
+            log.warning("soft-OT failed — falling back to mean_delta. Reason: %s", exc)
+            idx = pair_mean_delta(z_ctrl, z_pert)
+            return z_ctrl_f[idx]
     if method == "mean_delta":
-        return pair_mean_delta(z_ctrl, z_pert)
-    return pair_random(z_ctrl, z_pert, rng)
+        idx = pair_mean_delta(z_ctrl, z_pert)
+        return z_ctrl_f[idx]
+    if method == "random":
+        idx = pair_random(z_ctrl, z_pert, rng)
+        return z_ctrl_f[idx]
+    raise ValueError(f"Unknown pairing method: {method!r}")
 
 
 def _split_combo_name(combo_name: str, single_gene_names: set[str]) -> tuple[str, str]:
@@ -76,7 +103,7 @@ def build_pairs(
     cfg: Any,
     adata: Any | None = None,
     latents: Any | None = None,
-    method: Literal["ot", "random", "mean_delta"] | None = None,
+    method: Literal["ot", "random", "mean_delta", "soft_ot"] | None = None,
     out_dir: str | Path | None = None,
 ) -> dict[str, Path]:
     """Build all four pair files (train / val / ood / combo) and metadata.
@@ -233,13 +260,13 @@ def build_pairs(
         n_val = max(1, round(n_pert * val_frac))
         val_perm, train_perm = perm[:n_val], perm[n_val:]
 
-        ci_tr = _pair_with_fallback(Z_ctrl, Z_pert[train_perm], method, ot_epsilon, ot_iter, rng)
-        ci_va = _pair_with_fallback(Z_ctrl, Z_pert[val_perm],   method, ot_epsilon, ot_iter, rng)
+        zc_tr = _pair_with_fallback(Z_ctrl, Z_pert[train_perm], method, ot_epsilon, ot_iter, rng)
+        zc_va = _pair_with_fallback(Z_ctrl, Z_pert[val_perm],   method, ot_epsilon, ot_iter, rng)
 
-        tr_z_ctrl.append(Z_ctrl[ci_tr]);  tr_gene.append(np.full(len(ci_tr), pid, dtype=np.int32))
+        tr_z_ctrl.append(zc_tr); tr_gene.append(np.full(len(zc_tr), pid, dtype=np.int32))
         tr_z_pert.append(Z_pert[train_perm])
 
-        va_z_ctrl.append(Z_ctrl[ci_va]);  va_gene.append(np.full(len(ci_va), pid, dtype=np.int32))
+        va_z_ctrl.append(zc_va); va_gene.append(np.full(len(zc_va), pid, dtype=np.int32))
         va_z_pert.append(Z_pert[val_perm])
 
         n_per_pert[gene_name] = int(len(train_perm))
@@ -253,8 +280,8 @@ def build_pairs(
         log.info("OOD: pairing %s ...", gene_name)
         pert_cell_mask = pert_idx == pid
         Z_pert = Z[pert_cell_mask]
-        ci = _pair_with_fallback(Z_ctrl, Z_pert, method, ot_epsilon, ot_iter, rng)
-        oo_z_ctrl.append(Z_ctrl[ci]); oo_gene.append(np.full(len(ci), pid, dtype=np.int32))
+        zc = _pair_with_fallback(Z_ctrl, Z_pert, method, ot_epsilon, ot_iter, rng)
+        oo_z_ctrl.append(zc); oo_gene.append(np.full(len(zc), pid, dtype=np.int32))
         oo_z_pert.append(Z_pert)
 
     # ------------------------------------------------------------------
@@ -292,11 +319,11 @@ def build_pairs(
             log.info("Combo: pairing %s (%d+%d) ...", combo_name, g_a_idx, g_b_idx)
             pert_cell_mask = pert_idx == pid
             Z_pert = Z[pert_cell_mask]
-            ci = _pair_with_fallback(Z_ctrl, Z_pert, method, ot_epsilon, ot_iter, rng)
+            zc = _pair_with_fallback(Z_ctrl, Z_pert, method, ot_epsilon, ot_iter, rng)
 
-            co_z_ctrl.append(Z_ctrl[ci])
-            co_gene_a.append(np.full(len(ci), g_a_idx, dtype=np.int32))
-            co_gene_b.append(np.full(len(ci), g_b_idx, dtype=np.int32))
+            co_z_ctrl.append(zc)
+            co_gene_a.append(np.full(len(zc), g_a_idx, dtype=np.int32))
+            co_gene_b.append(np.full(len(zc), g_b_idx, dtype=np.int32))
             co_z_pert.append(Z_pert)
 
     # ------------------------------------------------------------------
@@ -429,6 +456,101 @@ def pair_ot(z_ctrl: Any, z_pert: Any, epsilon: float = 0.05, max_iter: int = 500
 
     raise RuntimeError(
         f"OT failed after 3 retries (final epsilon={_eps:.4f}). "
+        "build_pairs will fall back to mean_delta."
+    )
+
+
+def pair_soft_ot(
+    z_ctrl: Any,
+    z_pert: Any,
+    epsilon: float = 0.05,
+    max_iter: int = 500,
+) -> np.ndarray:
+    """Entropic-OT *soft* (barycentric) pseudo-pairing for a single perturbation.
+
+    Unlike :func:`pair_ot`, this function does **not** return an index into ``z_ctrl``.
+    It returns the column-normalised expectation of ``z_ctrl`` under the OT plan ``T``::
+
+        T_norm[:, j] = T[:, j] / sum_i T[i, j]
+        z_ctrl_soft[j] = sum_i T_norm[i, j] * z_ctrl[i]
+
+    Each row of the output is therefore a *convex combination* of observed controls
+    — a barycentric pseudo-control. As ε → 0 with well-separated controls, ``T``
+    becomes nearly one-hot and the output collapses to ``z_ctrl[argmax T[:, j]]``,
+    matching :func:`pair_ot`.
+
+    Why soft instead of hard?
+    -------------------------
+    The hard OT argmax discards within-cluster mass, leaving high within-gene
+    Δz residual variance ("pairing noise"). The soft expectation preserves the
+    full transport plan and produces a lower-variance pseudo-control target,
+    which is the binding constraint identified in P0B′.
+
+    These outputs are NOT observed single-cell controls; downstream analyses
+    must treat them as expected/barycentric vectors.
+
+    Parameters
+    ----------
+    z_ctrl
+        Latent vectors of control cells, shape ``(N_ctrl, d)``.
+    z_pert
+        Latent vectors of perturbed cells for one perturbation, shape ``(N_pert, d)``.
+    epsilon
+        Sinkhorn entropic regularization (DATA.md default = 0.05).
+    max_iter
+        Max Sinkhorn iterations.
+
+    Returns
+    -------
+    np.ndarray
+        Barycentric pseudo-controls, shape ``(N_pert, d)`` float32.
+
+    Raises
+    ------
+    RuntimeError
+        After 3 failed retries with doubling ε; caller should fall back to
+        ``pair_mean_delta``.
+    """
+    import ot as pot
+    from scipy.spatial.distance import cdist
+
+    z_ctrl_64 = np.asarray(z_ctrl, dtype=np.float64)
+    z_pert_64 = np.asarray(z_pert, dtype=np.float64)
+
+    C = cdist(z_ctrl_64, z_pert_64, metric="euclidean")
+    c_median = np.median(C)
+    if c_median > 0:
+        C = C / c_median
+
+    a = np.ones(len(z_ctrl_64)) / len(z_ctrl_64)
+    b = np.ones(len(z_pert_64)) / len(z_pert_64)
+
+    _eps = float(epsilon)
+    for attempt in range(3):
+        T = pot.sinkhorn(a, b, C, reg=_eps, numItermax=max_iter, warn=False)
+
+        if np.isnan(T).any() or np.isinf(T).any():
+            _eps *= 2.0
+            log.debug("soft-OT NaN/Inf on attempt %d — epsilon → %.4f", attempt + 1, _eps)
+            continue
+
+        col_sums = T.sum(axis=0, keepdims=True)        # (1, N_pert)
+        # Guard against zero-mass columns (numerically possible at extreme ε)
+        col_sums = np.where(col_sums > 0.0, col_sums, 1.0)
+        T_norm = T / col_sums                          # columns sum to 1
+        # Barycentric expectation: z_soft[j] = sum_i T_norm[i, j] * z_ctrl[i]
+        z_soft = T_norm.T @ z_ctrl_64                  # (N_pert, d)
+
+        if not np.all(np.isfinite(z_soft)):
+            _eps *= 2.0
+            log.debug("soft-OT non-finite barycenters on attempt %d — epsilon → %.4f",
+                      attempt + 1, _eps)
+            continue
+
+        return z_soft.astype(np.float32)
+
+    raise RuntimeError(
+        f"soft-OT failed after 3 retries (final epsilon={_eps:.4f}). "
         "build_pairs will fall back to mean_delta."
     )
 

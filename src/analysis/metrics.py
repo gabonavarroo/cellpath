@@ -219,6 +219,56 @@ def uncertainty_calibration_spearman(
     return 0.0 if (rho != rho) else rho  # NaN → 0.0
 
 
+def gini_coefficient(values: np.ndarray | list[float]) -> float:
+    """Gini coefficient for a one-dimensional nonnegative importance vector.
+
+    Mathematical definition after sorting ``x`` ascending:
+
+        G = (2 * sum_i(i * x_i)) / (n * sum_i(x_i)) - (n + 1) / n
+
+    where ``i`` is one-indexed. Inputs with negative values are shifted by
+    ``-min(x)`` before computing ``G`` so contraction-improvement vectors with a
+    few expanding actions remain interpretable as relative heterogeneity. A
+    uniform vector has ``G = 0``; values closer to 1 indicate concentration in a
+    small subset of genes.
+    """
+    arr = np.asarray(values, dtype=np.float64).ravel()
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return 0.0
+    min_val = float(arr.min())
+    if min_val < 0.0:
+        arr = arr - min_val
+    total = float(arr.sum())
+    if total <= 0.0:
+        return 0.0
+    arr = np.sort(arr)
+    n = arr.size
+    idx = np.arange(1, n + 1, dtype=np.float64)
+    g = (2.0 * float(np.sum(idx * arr))) / (n * total) - (n + 1.0) / n
+    return float(max(0.0, min(1.0, g)))
+
+
+def shannon_entropy(values: np.ndarray | list[float]) -> float:
+    """Shannon entropy of a nonnegative weight vector.
+
+    H(p) = -sum_i p_i log(p_i), where ``p_i = values_i / sum(values)``.
+
+    This is used for action-contraction heterogeneity. A one-hot vector has
+    entropy 0; a uniform vector of length ``n`` has entropy ``log(n)``. Inputs are
+    interpreted as magnitudes, so callers should pass ``abs(effect)`` when signs
+    are not meaningful for the distribution.
+    """
+    arr = np.asarray(values, dtype=np.float64).ravel()
+    arr = arr[np.isfinite(arr)]
+    arr = arr[arr > 0.0]
+    total = float(arr.sum())
+    if arr.size == 0 or total <= 0.0:
+        return 0.0
+    p = arr / total
+    return float(-np.sum(p * np.log(p)))
+
+
 def dynamics_validation_gate(
     z_ctrl: np.ndarray,
     gene_idx: np.ndarray,
@@ -939,6 +989,82 @@ def gsea_preranked(
     nes = float(es_obs / abs(mean_null)) if mean_null != 0 else 0.0
 
     return {"ES": float(es_obs), "NES": nes, "p_value": p_value, "fdr": min(p_value, 1.0)}
+
+
+def action_freq_chronos_spearman(
+    action_freq: dict[str, int | float],
+    chronos: Any,
+    seed: int = 42,
+    n_boot: int = 10_000,
+) -> dict[str, Any]:
+    """Spearman correlation between action frequency and DepMap Chronos.
+
+    For every gene ``g`` present in both ``action_freq`` and ``chronos``, compute
+
+        rho = corr_spearman(freq_g, chronos_g)
+
+    with a two-sided p-value from ``scipy.stats.spearmanr``. Bootstrap confidence
+    intervals resample the overlapping gene set with replacement and recompute
+    ``rho``. ``NO_OP`` is excluded. More negative Chronos means stronger K562
+    dependency, so a negative ``rho`` means high-frequency actions are biased
+    toward more dependency-associated genes. This is a plausibility statistic,
+    not biological validation.
+    """
+    from scipy.stats import spearmanr
+
+    if hasattr(chronos, "dropna"):
+        chronos_map = chronos.dropna().to_dict()
+    else:
+        chronos_map = {k: v for k, v in dict(chronos).items() if v is not None}
+
+    genes = [
+        str(g)
+        for g in action_freq
+        if str(g) != "NO_OP" and str(g) in chronos_map and np.isfinite(float(chronos_map[str(g)]))
+    ]
+    genes.sort()
+    if len(genes) < 3:
+        return {
+            "rho": 0.0,
+            "p_value": 1.0,
+            "ci95_low": 0.0,
+            "ci95_high": 0.0,
+            "n_overlap": int(len(genes)),
+            "n_boot": int(n_boot),
+        }
+
+    freq = np.asarray([float(action_freq[g]) for g in genes], dtype=np.float64)
+    chrn = np.asarray([float(chronos_map[g]) for g in genes], dtype=np.float64)
+    stat = spearmanr(freq, chrn)
+    rho = float(stat.statistic)
+    p_value = float(stat.pvalue)
+    if not np.isfinite(rho):
+        rho = 0.0
+    if not np.isfinite(p_value):
+        p_value = 1.0
+
+    rng = np.random.default_rng(seed)
+    boot: list[float] = []
+    for _ in range(max(0, int(n_boot))):
+        idx = rng.integers(0, len(genes), size=len(genes))
+        b = spearmanr(freq[idx], chrn[idx]).statistic
+        if np.isfinite(float(b)):
+            boot.append(float(b))
+    if boot:
+        ci_low, ci_high = np.percentile(np.asarray(boot), [2.5, 97.5])
+        ci_low = float(min(ci_low, rho))
+        ci_high = float(max(ci_high, rho))
+    else:
+        ci_low = ci_high = rho
+
+    return {
+        "rho": float(rho),
+        "p_value": float(p_value),
+        "ci95_low": float(ci_low),
+        "ci95_high": float(ci_high),
+        "n_overlap": int(len(genes)),
+        "n_boot": int(n_boot),
+    }
 
 
 def null_enrichment_comparison(

@@ -6,6 +6,38 @@
 
 ---
 
+## Session 2026-05-16-0310  (agent: research-lead)
+
+**Phase:** P0B′ — pairing correction (V2 reorder, executed)
+**Status:** Built `artifacts_v2/{pairs_mean_delta,pairs_random,dynamics_mean_delta_default,dynamics_random_default}`. Comparator, gate breakdowns, and interpretation written. V1 OT pair metadata SHA verified unchanged; `git status -- artifacts/ artifacts_64/` clean. All hard acceptance criteria (1–7) met. Plan committed at repo root as `P0B_PRIME_PAIRING_CORRECTION_PLAN.md` (`09ec6b6`).
+
+**Metrics:**
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| val_mlp_minus_ridge_pearson (mean_delta) | ≥ +0.030 | **+0.0214** | PARTIAL (2.9× V1's +0.0074) |
+| val_mlp_minus_ridge_pearson (random control) | should not pass | −0.0094 | OK (ridge wins on random) |
+| ood_mlp_minus_ridge_pearson (mean_delta) | ≥ +0.030 (secondary) | +0.1121 | PASS (×2.8 vs V1) |
+| ood_mlp_pearson (mean_delta) | ≥ 0.40 (secondary) | 0.3833 | soft-flag (V1 was 0.490) |
+| uncertainty_calibration_spearman (mean_delta) | ≥ 0.20 | 0.2214 | PASS |
+| dim 11 val margin (mean_delta) | strictly > −0.124 | −0.0630 | PASS (≈ ×2 improvement) |
+| dim 11 OOD margin (mean_delta) | strictly > −0.4331 | −0.2533 | PASS (≈ ×1.7 improvement) |
+| pairing_noise_median (mean_delta) | drop from 0.8935 | 0.8493 | small drop (Δ = −0.044) |
+| pairing_noise_median (random) | ≈ 1.0 ceiling | 0.9495 | OK |
+
+**Verdict:** Codex's P0A Recommendation B is empirically supported: cleaner pairing improves the gate margin monotonically with pairing-noise ratio (random < OT < mean_delta), the OOD margin nearly triples, and dim 11 is meaningfully de-confounded. But mean-delta alone leaves ~0.01 of margin on the table — H_pair_primary is partially supported, not fully. Within-gene Δz variance is dominated by *biological* heterogeneity that no purely-deterministic pairing scheme can erase.
+
+**Blockers:** none.
+**Next:**
+1. Plan P0B″: soft-OT expectation (replace `pair_ot` argmax with `T[:, j].T @ z_ctrl`) on mean-delta-quality pairs OR correlation-loss sweep `λ_corr ∈ {0.05, 0.10, 0.30}` on `artifacts_v2/pairs_mean_delta`. Run soft-OT alone first.
+2. Hard-bench rerun (Task 8) **deferred** until P0B″ clears the gate.
+3. Do NOT advance to P0C yet. Do NOT retrain VAE.
+
+**Artifacts (all under `artifacts_v2/`):** `pairs_mean_delta/`, `pairs_random/`, `dynamics_mean_delta_default/` (gate.json `passed=False`), `dynamics_random_default/` (gate.json `passed=False`), `diagnostics/pairing_noise_{mean_delta,random}.{json,md}`, `diagnostics/gate_breakdown_{mean_delta,random}/`, `diagnostics/pairing_comparison.{json,md}`, `interpretation_p0b_prime.md`. New code/tests committed: `tests/test_p0b_prime_pairing.py` (`4dbf755`), `scripts/compare_pairings.py` (`97b65e1`), `tests/fixtures/v1_pairs_metadata.sha256`.
+
+**Test suite:** `test_p0b_prime_pairing.py` (4 tests) — all pass once artifacts exist (full sweep at session end).
+
+---
+
 ## Session 2026-05-15 — DepMap gene-score comparison
 
 **Phase:** 5 reporting — stronger DepMap cross-validation.

@@ -162,6 +162,107 @@ def load_gene_panel_manifest(
     return by_name
 
 
+def preranked_gsea(
+    action_freq: dict[str, int | float],
+    chronos: Any,
+    panel_sets: dict[str, list[str]],
+    n_perm: int = 10_000,
+    seed: int = 42,
+) -> list[dict[str, Any]]:
+    """Preranked GSEA for V2 action-frequency biology checks.
+
+    Genes are scored by ``action_freq_g * (-Chronos_g)`` over the action universe,
+    so high ranks correspond to genes both frequently selected by the policy and
+    more negative in K562 Chronos. For a panel ``S``, the enrichment score is the
+    maximum absolute deviation of the weighted running sum:
+
+        ES(S) = max_k sum_{i<=k} [hit_i * |score_i| / sum_hit - miss_i / n_miss]
+
+    The null permutes panel membership over the same ranked universe. BH-FDR is
+    applied across panels. This is a ranked plausibility test, not biological
+    validation of reprogramming.
+    """
+    from statsmodels.stats.multitest import multipletests
+
+    if hasattr(chronos, "dropna"):
+        chronos_map = chronos.dropna().to_dict()
+    else:
+        chronos_map = {k: v for k, v in dict(chronos).items() if v is not None}
+
+    genes = [
+        str(g)
+        for g in action_freq
+        if str(g) != "NO_OP" and str(g) in chronos_map and np.isfinite(float(chronos_map[str(g)]))
+    ]
+    genes = sorted(dict.fromkeys(genes))
+    if not genes:
+        return []
+    scores = np.asarray(
+        [float(action_freq.get(g, 0.0)) * (-float(chronos_map[g])) for g in genes],
+        dtype=np.float64,
+    )
+    order = np.argsort(-scores)
+    genes_sorted = [genes[i] for i in order]
+    scores_sorted = scores[order]
+    universe = set(genes_sorted)
+    rng = np.random.default_rng(seed)
+
+    def _running_es(hits: np.ndarray) -> float:
+        n_hit = int(hits.sum())
+        n_miss = int((~hits).sum())
+        if n_hit == 0 or n_miss == 0:
+            return 0.0
+        hit_weights = np.abs(scores_sorted)
+        hit_sum = float(hit_weights[hits].sum())
+        if hit_sum <= 0.0:
+            hit_weights = np.ones_like(hit_weights)
+            hit_sum = float(hit_weights[hits].sum())
+        running = np.where(hits, hit_weights / hit_sum, -1.0 / max(n_miss, 1)).cumsum()
+        return float(running[np.abs(running).argmax()])
+
+    rows: list[dict[str, Any]] = []
+    p_values: list[float] = []
+    for panel, panel_genes in panel_sets.items():
+        panel_overlap = sorted(set(map(str, panel_genes)) & universe)
+        hits = np.asarray([g in panel_overlap for g in genes_sorted], dtype=bool)
+        es = _running_es(hits)
+        n_hit = int(hits.sum())
+        null_es = np.zeros(max(1, int(n_perm)), dtype=np.float64)
+        if n_hit > 0 and n_hit < len(genes_sorted):
+            for i in range(len(null_es)):
+                perm_hits = np.zeros(len(genes_sorted), dtype=bool)
+                perm_hits[rng.choice(len(genes_sorted), size=n_hit, replace=False)] = True
+                null_es[i] = _running_es(perm_hits)
+            if es >= 0:
+                same_sign = null_es[null_es >= 0]
+                denom = float(np.mean(np.abs(same_sign))) if len(same_sign) else 1.0
+                p = float((np.sum(same_sign >= es) + 1) / (len(same_sign) + 1)) if len(same_sign) else 1.0
+            else:
+                same_sign = null_es[null_es < 0]
+                denom = float(np.mean(np.abs(same_sign))) if len(same_sign) else 1.0
+                p = float((np.sum(same_sign <= es) + 1) / (len(same_sign) + 1)) if len(same_sign) else 1.0
+            nes = float(es / denom) if denom > 0.0 else 0.0
+        else:
+            p = 1.0
+            nes = 0.0
+        p_values.append(p)
+        rows.append({
+            "panel": str(panel),
+            "n_panel_genes": int(len(set(map(str, panel_genes)))),
+            "n_overlap": int(n_hit),
+            "es": float(es),
+            "nes": float(nes),
+            "p_value": float(p),
+            "q_value": 1.0,
+        })
+
+    if p_values:
+        _, q_vals, _, _ = multipletests(p_values, method="fdr_bh")
+        for row, q in zip(rows, q_vals, strict=True):
+            row["q_value"] = float(q)
+    return rows
+
+
 def run_depmap_enrichment(
     rl_action_freq: dict[str, int],
     background_genes: list[str],

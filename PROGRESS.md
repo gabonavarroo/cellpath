@@ -6,6 +6,151 @@
 
 ---
 
+## Session 2026-05-15 — DepMap gene-score comparison
+
+**Phase:** 5 reporting — stronger DepMap cross-validation.
+**Status:** Implemented and run. All acceptance criteria met.
+
+**New artifacts:**
+- `artifacts/eval/depmap_gene_level_scores.csv` — per-gene Chronos scores + group membership flags
+- `artifacts/eval/depmap_comparison_summary.json` — MWU + permutation p-values, group stats, interpretation
+- `artifacts/eval/depmap_comparison_table.md` — defense-ready Markdown report
+- `artifacts/eval/figures/fig_depmap_gene_score_comparison.png` — violin/jitter plot
+
+**Key numbers (top-20, V1 PPO det):**
+| group | n (DepMap) | mean Chronos | weighted mean | frac essential |
+|---|---:|---:|---:|---:|
+| PPO det top-20 | 18 | −0.0845 | **−0.1675** | 0.056 |
+| PPO stoch top-20 | 18 | −0.0845 | −0.1713 | 0.056 |
+| Random top-20 | 20 | −0.0641 | −0.0659 | 0.050 |
+| Action universe | 99 | −0.1120 | −0.1120 | 0.051 |
+
+**Interpretation (honest):**
+- Unweighted MWU PPO det vs random: p=0.336, q=0.504, Cliff's delta=−0.083. **Not significant.**
+- Weighted mean (by action count): PPO −0.168 vs random −0.066. The large difference is driven by CKS1B (count=274, Chronos=−0.337) and HK2 (count=54, Chronos=−0.586 essential). A plausibility signal, not a causal claim.
+- Small top-K sample size (n≈20) limits statistical power. Non-significant results reported as negative evidence, not hidden.
+
+**Tests:** 12 new tests in `tests/test_depmap_compare.py`. Suite total: 194 passed.
+
+**Blockers:** none.
+**Next:** Defense rehearsal.
+
+---
+
+## Session 2026-05-15 — Phase 5 wrap (MVP V1 frozen)
+
+**Phase:** 5 — Reporting + evaluation. Model/env/reward modifications deferred to future work.
+**Status:** Phase 5 deliverables complete. Every required defense artifact is on disk.
+
+**Changes this session:**
+- NEW: `src/analysis/aggregate.py` — pure-function result aggregator (`build_summary`, `build_results_table_md`, `build_caveats_md`).
+- NEW: `scripts/aggregate_eval.py` — Hydra wrapper writing `artifacts/eval/{summary,results_table,caveats}`.
+- MODIFY: `scripts/evaluate.py` — runs aggregator + latent quality + DepMap enrichment.
+- MODIFY: `scripts/visualize.py` — 5 required figures + 2 optional UMAP figures; `+visualize.compute_umap_if_missing=true` fits and caches a UMAP reducer if none exists.
+- MODIFY: `src/pipeline.py` — six `step_*` bodies wired as subprocess calls; `--from <step>` added.
+- MODIFY: `Makefile` — `make aggregate`, `make visualize` targets added.
+- NEW: `tests/test_aggregate.py`, `tests/test_rl_eval_infra.py`, `tests/test_contraction_diagnostic.py`.
+
+**Outputs (all under `artifacts/eval/`):**
+
+| Artifact | Description |
+|---|---|
+| `summary.json` | Composite blob: provenance, RL, dynamics, contraction, top actions |
+| `results_table.md` | Defense-ready Markdown tables (one per section) |
+| `caveats.md` | Four binding constraints + ranked future work |
+| `latent_quality.json` | Silhouette + ARI on perturbation labels |
+| `depmap_enrichment.csv` | RL top-20 genes vs K562 DepMap essentials |
+| `evaluate_report.json` | Top-level index linking all artifacts |
+| `figures/fig_rl_ppo_vs_random.png` | PPO det 0.988 / PPO stoch 0.988 / random 0.840, "+14.8 pp" |
+| `figures/fig_contraction_comparison.png` | fraction_improved + mean_improvement, 32D vs 64D |
+| `figures/fig_dynamics_gate.png` | MLP vs ridge Pearson, primary + OOD, 32D and 64D |
+| `figures/fig_rl_action_freq.png` | Top-15 PPO (CKS1B=274) vs random, overlap: CDKN1A/CELF2/TSC22D1 |
+| `figures/fig_depmap_enrichment.png` | q-value heatmap (both panels q>0.05; non-significant, as expected) |
+
+**Metrics (32D V1 headline):**
+| Metric | Value |
+|---|---:|
+| PPO det success rate | 0.988 |
+| PPO stoch success rate | 0.988 |
+| Random uniform-valid success | 0.840 |
+| PPO Δ vs random | +14.8 pp |
+| Mean steps (PPO det / random) | 2.28 / 5.53 |
+| Dynamics gate margin (32D, val Pearson) | +0.0074 (FAILS threshold +0.030) |
+| Contraction fraction_improved (32D start8 / auto) | 1.0000 / 0.9554 |
+| Latent silhouette | see `latent_quality.json` |
+| DepMap q<0.05 rows | 0 (both tests non-significant; documented in caveats.md) |
+
+**Blockers:** none (gate failed but overridden; surrogate contractive — all documented).
+**Next:** Defense rehearsal. No further code changes pre-defense.
+
+---
+
+## Session 2026-05-15 — Contraction diagnostics
+
+**Status:** P0B contraction diagnostic implemented and run across 32D/64D dynamics branches.
+
+**Metrics:**
+| Run | Fraction improved | Mean improvement | Median | Worst | n_pairs |
+|---|---:|---:|---:|---:|---:|
+| 32D start8 | 1.0000 | 2.7373 | 2.7314 | 0.5972 | 11760 |
+| 32D auto | 0.9554 | 1.0076 | 1.0152 | -1.8639 | 105000 |
+| 64D start8 | 1.0000 | 3.2823 | 3.3423 | 0.9457 | 5775 |
+| 64D auto | 0.9842 | 1.3485 | 1.3563 | -1.4989 | 105000 |
+| 64D baseline_plain start8 | 1.0000 | 3.0975 | 3.1635 | 0.8077 | 5775 |
+
+**Interpretation:** The learned dynamics field is globally contractive across viable models. The artifact is not only caused by `state_linear`, since the 64D baseline/plain MLP is also fully contractive under the hard start8 setting. 64D is more contractive than 32D and does not improve the dynamics gate. Keep 32D as the primary MVP branch.
+
+**Next:** Add diagnostic aggregation script comparing contraction diagnostics with PPO action frequencies, then move to Phase 5 evaluate/visualize.
+
+## Session 2026-05-15 — P0A RL evaluation infrastructure
+
+**Phase:** 3/5 — RL evaluation provenance and matched baselines.
+
+**Status:** P0A complete. Formal RL evaluation scripts now produce deterministic/stochastic PPO evals, matched random baseline, summaries, and metadata.json. Existing best 32D PPO policy re-scored under p50/start8 without mutating epsilon_success.json.
+
+**Metrics:**
+| Evaluation | Success | Failures | Mean steps | Mean final distance | NO-OP first rate |
+|---|---:|---:|---:|---:|---:|
+| PPO deterministic | 0.988 | 6/500 | 2.28 | 3.029 | 0.012 |
+| PPO stochastic | 0.988 | 6/500 | 2.29 | 3.037 | 0.012 |
+| Random uniform-valid | 0.840 | 80/500 | 5.53 | 3.411 | 0.008 |
+
+**Interpretation:** PPO improves over random by +14.8 percentage points under the matched p50/start8 setting, reaches the target in fewer steps, and ends closer to z_ref. Deterministic and stochastic results are nearly identical, suggesting stable policy behavior.
+
+**Caveat:** Dynamics gate remains failed and overridden. Result validates the learned-control loop, not biological reprogramming.
+
+**Next:** Implement contraction diagnostic and run on 32D, 64D, and 64D architecture variants.
+
+## Session 2026-05-15 — 64D VAE/dynamics ablation
+
+## 64D dynamics ablation result
+
+64D VAE + dynamics variants were trained under `artifacts_64/`.
+
+| Variant | Val Pearson | MLP-ridge margin | OOD Pearson | OOD margin | Status |
+|---|---:|---:|---:|---:|---|
+| 32D state_linear primary | 0.6085 | +0.0074 | ~0.479 | +0.040 | keep primary |
+| 64D state_linear | 0.5965 | -0.0191 | 0.3686 | -0.0989 | reject |
+| 64D baseline_plain | 0.5958 | -0.0197 | 0.3859 | -0.0817 | reject |
+| 64D gene_bias | 0.5157 | -0.0999 | 0.1191 | -0.3484 | reject |
+| 64D state_linear_gene_bias | 0.5617 | -0.0538 | 0.1053 | -0.3623 | reject |
+
+Interpretation: 64D improves uncertainty calibration but worsens ridge margin and OOD generalization. Removing state_linear does not rescue 64D. Keep 32D as the primary MVP branch. Next bottleneck: contraction diagnostics and pair/dynamics geometry.
+
+
+**Status:** 64D VAE branch completed under `artifacts_64/` and dynamics trained. 64D does not pass the Phase 2 gate.
+
+**Metrics:**
+| Metric | 32D | 64D |
+|---|---:|---:|
+| Val R² | 0.3954 | 0.4012 |
+| Val Pearson | 0.6085 | 0.5965 |
+| MLP-ridge Pearson margin | +0.0074 | -0.0191 |
+| OOD Pearson | 0.479 | 0.3686 |
+| Uncertainty Spearman | 0.249 | 0.804 |
+
+**Interpretation:** 64D improves uncertainty calibration but worsens the blocked ridge-margin metric and OOD generalization. The bottleneck is unlikely to be solved by latent dimensionality alone. Keep 32D as primary MVP; use 64D as an ablation. Next step is contraction diagnostics and state_linear analysis.
+
 ## Session 2026-05-14-1800 (agent: B)
 
 **Phase:** 2 — Promote best dynamics candidate as default; document Phase 2 status.

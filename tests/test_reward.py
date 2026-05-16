@@ -164,11 +164,14 @@ class TestComputeReward:
         assert r_no - r_yes == pytest.approx(penalty, abs=1e-6)
 
     def test_uncertainty_penalty_when_lambda_unc_positive(self) -> None:
+        """Per locked semantics in src/rl/reward.py:6-11 the penalty is ``λ_unc · ‖σ‖``
+        where ``σ = exp(½ · log_var)`` (i.e. L2 norm of per-dim std-devs)."""
         from src.rl.reward import compute_reward
 
         z_ref   = _zeros()
-        log_var = np.full(32, -1.0, dtype=np.float32)  # exp(-1) ≈ 0.3679
-        expected_penalty = float(np.mean(np.exp(log_var.astype(np.float64))))
+        log_var = np.full(32, -1.0, dtype=np.float32)
+        sigma = np.exp(0.5 * log_var.astype(np.float64))
+        expected_penalty = float(np.linalg.norm(sigma))
 
         r_no_unc = compute_reward(
             _zeros(), z_ref, action=10, noop_idx=10,

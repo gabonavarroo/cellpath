@@ -442,6 +442,32 @@ def _build_start_pool(
     return pool
 
 
+def resolve_epsilon(cfg: Any) -> tuple[float, str]:
+    """Resolve the success-distance threshold ε and report its provenance.
+
+    Precedence: ``cfg.rl.env.epsilon_override`` (when set, a float) wins over the value cached
+    in ``artifacts/vae/epsilon_success.json``. The override path lets eval-time scripts switch
+    percentiles (e.g. p90 ↔ p50) without mutating the canonical JSON.
+
+    Returns
+    -------
+    (epsilon, source) :
+        ``epsilon`` is the float to use as the success threshold; ``source`` is a short
+        human-readable string suitable for logging and the per-run ``metadata.json``
+        (``"override(<value>)"`` or ``"json(p<percentile>)"``).
+    """
+    override = cfg.rl.env.get("epsilon_override", None) if hasattr(cfg.rl.env, "get") else None
+    if override is not None:
+        eps = float(override)
+        return eps, f"override({eps:.6g})"
+
+    with open(cfg.paths.vae_epsilon_success_json) as f:
+        blob = json.load(f)
+    eps = float(blob["value"])
+    pct = blob.get("percentile", "?")
+    return eps, f"json(p{pct})"
+
+
 def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
     """Return a zero-arg factory that constructs a fresh ``CellReprogrammingEnv``.
 
@@ -450,8 +476,8 @@ def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
     """
     # Load all artifacts once
     z_ref = np.load(str(cfg.paths.vae_z_reference_centroid))
-    with open(cfg.paths.vae_epsilon_success_json) as f:
-        epsilon = float(json.load(f)["value"])
+    epsilon, epsilon_source = resolve_epsilon(cfg)
+    log.info("Env epsilon = %.4f  (source: %s)", epsilon, epsilon_source)
     n_genes = _peek_n_genes(cfg)
 
     allow_untrained = bool(cfg.rl.train.get("smoke_with_untrained_dynamics", False))

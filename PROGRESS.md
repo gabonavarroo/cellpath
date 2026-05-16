@@ -6,6 +6,34 @@
 
 ---
 
+## Session 2026-05-16-1200  (agent: research-lead)
+
+**Phase:** Hard benchmark — soft-OT dynamics + V1 PPO
+**Status:** Ran `scripts/evaluate_rl_hard.py` on `artifacts_v2/dynamics_soft_ot_default/` with V1 PPO (`artifacts/rl_sweeps/p50_start8_shaped_noopfix_500k/ppo.zip`). Complete success-rate collapse: **0.000 across all 64 cells and all baselines** (vs V1's 1.000 at the primary cell). The soft-OT dynamics field is a qualitatively different environment for policy execution. Committed P0B″ code (`79c594d`): `src/data/perturbation_pairs.py`, `tests/test_p0b_doubleprime_pairing.py`, `PROGRESS.md`.
+
+**Hard Benchmark Metrics (soft-OT dynamics + V1 PPO):**
+| Cell | Policy | V1 sr | soft-OT sr | PPO−greedy (pp) |
+| --- | --- | ---: | ---: | ---: |
+| k3_epsp25_bin8-10_splitood (primary) | ppo_deterministic | 1.000 | **0.000** | 0.0 |
+| k3_epsp25_bin8-10_splitood (primary) | greedy_dyn_1 | 1.000 | **0.000** | — |
+| k3_epsp25_bin8-10_splitood (primary) | ridge_greedy | 0.716 | **0.000** | — |
+| All 64 OOD cells | ppo_deterministic | ~40/64 pass | **0/64 pass** | — |
+| All 64 OOD cells | greedy_dyn_1 | ~40/64 pass | **0/64 pass** | — |
+
+**Mechanism:** `greedy_dyn_1` picks noop in 40/64 cells (exclusively), with no success in any of the remaining 24. The soft-OT dynamics predicts that no single-step gene perturbation achieves better latent distance than a no-op — the dynamics field learned smooth barycentric targets with small per-gene effects. V1 PPO makes cells escape to large distances (primary cell: 24.4 vs target < 3.166) because its policy was calibrated to exploit V1's larger, per-cell-specific contraction directions. The PPO−greedy_dyn_1 gap is 0.0pp (floor collinearity), reconfirming V1's finding that PPO doesn't add planning beyond greedy — but now the floor is 0.000, not 1.000.
+
+**Verdict:** Hard benchmark is currently uninformative for PPO evaluation with the new dynamics. The result is mechanically consistent with the OOD dim-11 caveat from P0B″: barycentric smoothing compressed per-cell signal, producing a conservative dynamics field that the greedy oracle refuses to use. Does not invalidate the soft-OT dynamics quality (val Pearson 0.9338). Requires PPO retrain on soft-OT dynamics before the collinearity diagnostic has meaning.
+
+**Blockers:** none (hard benchmark collapse is expected and interpretable, not a bug).
+**Next:**
+1. **P0C: Retrain PPO on soft-OT dynamics.** PPO must be trained on the new field before the hard benchmark can measure PPO−greedy collinearity meaningfully.
+2. After PPO retrain, re-run hard benchmark with `--dynamics_dir artifacts_v2/dynamics_soft_ot_default --ppo_zip artifacts_v2/rl_soft_ot/ppo.zip`.
+3. If greedy_dyn_1 still collapses to noop after PPO retrain (i.e., the dynamics field is too conservative for greedy to ever succeed), investigate reward recalibration or whether a correlation-loss ablation (P0B‴) can partially restore per-cell directionality.
+
+**Artifacts:** `artifacts_v2/eval_hard_soft_ot_v1policy/` (results_table.md, 64 cell summaries, ridge_buffers.npz), `artifacts_v2/interpretation_hard_bench_soft_ot.md`.
+
+---
+
 ## Session 2026-05-16-0347  (agent: research-lead)
 
 **Phase:** P0B″ — soft-OT (barycentric) pairing; gate-closing test

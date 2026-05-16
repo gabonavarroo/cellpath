@@ -6,6 +6,44 @@
 
 ---
 
+## Session 2026-05-16-1800  (agent: research-lead)
+
+**Phase:** P0C0 — Reachability diagnostic (before PPO retrain)
+**Status:** Ran D1 (per-gene contraction), D2 (NoopFreeGreedy hard benchmark), D3 (beam-search
+reachability probe), D4 (ε-feasibility) on soft-OT, mean-delta, and V1 OT. Decision: **PATH B**.
+Committed: `P0C0_REACHABILITY_PLAN.md`, `src/rl/baselines.py` (NoopFreeGreedyPolicy),
+`scripts/evaluate_rl_hard.py` (greedy_dyn_1_noop_free wiring), `scripts/probe_reachability.py`.
+
+**Metrics:**
+| Component | soft-OT | mean-delta | V1 OT |
+| --- | --- | --- | --- |
+| D1 fraction_positive (contraction) | **0.000** | **0.826** | ~0.955 |
+| D1 mean_improvement | −1.425 | +0.405 | ~+0.52 |
+| D2 greedy_dyn_1 sr (k=3) | 0.000 | 0.000 | 1.000 |
+| D2 greedy mean_final_dist | 8.479 (=noop) | **5.489** | 2.835 |
+| D2 noop_free mean_final_dist | 21.999 | 5.489 | 2.835 |
+| D3 beam success_rate (repeat=on) | 0.000 | 0.000 | **1.000** |
+| D3 best_final_distance | 16.974 | **4.114** | 1.593 |
+| D4 ε for 25% success | 18.679 | 5.016 | 1.910 |
+
+**Conclusion:**
+- soft-OT is **fundamentally anti-contractive**: all 105 genes increase distance at every start
+  state (fraction_positive=0.000). Beam best_dist=16.97. PPO training on this field would fail.
+- mean-delta has **strong directionality** (fraction_positive=0.826, beam best_dist=4.11 ≈
+  epsilon_p25+0.95). The blocker is model accuracy (val margin +0.0214 < threshold +0.030).
+  At k=8 RL steps, mean-delta dynamics would enable successful trajectories.
+
+**Blockers:** none (diagnostics completed; next step requires explicit P0B2 approval).
+**Next:**
+1. **P0B2: Retrain dynamics on `artifacts_v2/pairs_mean_delta` with λ_corr ∈ {0.05, 0.10}**
+   to close the gate (val margin +0.0214 → target +0.030). Requires `correlation_loss` in
+   `src/analysis/metrics.py` and `lambda_corr` wired into `scripts/train_dynamics.py`.
+   Command in `artifacts_v2/interpretation_p0c0_reachability.md §P0B2 Command`.
+2. After gate passes: run beam-search probe on new dynamics to confirm success_rate > 0.
+3. Then proceed to **P0C: PPO retrain on mean-delta+corr dynamics**.
+
+---
+
 ## Session 2026-05-16-1200  (agent: research-lead)
 
 **Phase:** Hard benchmark — soft-OT dynamics + V1 PPO

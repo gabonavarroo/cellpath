@@ -1,0 +1,11 @@
+# Project-curated CML/MAPK stress plausibility panel.
+ABL1
+MAPK1
+MAP2K3
+MAP2K6
+MAP4K3
+MAP4K5
+CBL
+JUN
+FOSB
+DUSP9

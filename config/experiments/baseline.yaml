@@ -1,3 +1,4 @@
+# @package _global_
 # config/experiments/baseline.yaml — first run, all defaults.
 # Composes the default config and labels the run.
 

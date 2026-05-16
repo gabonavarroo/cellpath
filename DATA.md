@@ -317,13 +317,17 @@ data/processed/depmap_k562_chronos.parquet
 For an RL action frequency vector `freq[gene]`:
 
 1. **Hypergeometric (top-K test).** Sort genes by frequency, take top K (default 20). Test
-   overlap with: (a) DepMap K562 essentials, (b) MSigDB Hallmark Hematopoiesis, (c) leukemia
-   driver panel. Reports raw p, FDR-adjusted q (Benjamini-Hochberg).
+   overlap with: (a) DepMap K562 essentials, (b) committed V1 MSigDB Hallmark-derived
+   panels, (c) committed hematopoietic/leukemia lineage panels under `data/panels/`.
+   Reports raw p, FDR-adjusted q (Benjamini-Hochberg), plus panel provenance from
+   `data/panels/manifest.json`.
 2. **GSEA preranked.** Use frequency as ranking signal; gene set as Chronos-defined essentials.
    Reports ES, NES, FDR.
-3. **Null comparison.** Repeat both tests on (a) random gene sets matched to RL action set
-   size; (b) random gene sets matched to RL action *expression-level distribution* (controls
-   for HVG bias). Reports z-score of observed enrichment vs null.
+3. **Null comparison.** Repeat the top-K statistic on (a) random gene sets matched to RL action
+   set size; (b) random gene sets matched to RL action *expression-level distribution* when
+   expression means can be derived from `latents.h5ad` (controls for HVG bias). If expression
+   means are unavailable or incomplete, the report explicitly records the size-matched fallback
+   in `details_json`.
 
 **Honesty.** A positive enrichment is *biological plausibility of selected genes*. It is not:
 proof of reprogramming, evidence of causality, or therapeutic validity. ARCHITECTURE.md

@@ -1,0 +1,11 @@
+# MSigDB Hallmark Apoptosis concept, V1 curated subset.
+BAK1
+BCL2L11
+CDKN1A
+CDKN1B
+CDKN1C
+JUN
+CEBPB
+IRF1
+TP73
+EGR1

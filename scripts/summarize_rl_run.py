@@ -64,6 +64,8 @@ def _entropy_normalized(counts: dict[str, int]) -> float:
 def _summarize_rollouts(rollouts_path: Path, action_freq_path: Path) -> dict[str, Any]:
     import polars as pl
 
+    from src.analysis.metrics import mean_steps_to_success, success_rate
+
     df = pl.read_parquet(str(rollouts_path))
     if df.height == 0:
         return {
@@ -72,6 +74,7 @@ def _summarize_rollouts(rollouts_path: Path, action_freq_path: Path) -> dict[str
             "failures": 0,
             "success_rate": 0.0,
             "mean_steps": 0.0,
+            "mean_steps_to_success": float("nan"),
             "mean_total_reward": 0.0,
             "mean_final_distance": 0.0,
             "mean_min_distance": 0.0,
@@ -92,10 +95,11 @@ def _summarize_rollouts(rollouts_path: Path, action_freq_path: Path) -> dict[str
     )
 
     n_episodes = int(by_ep.height)
-    successes = int(by_ep["success"].sum())
+    rate = success_rate(df)
+    successes = round(rate * n_episodes)
     failures = n_episodes - successes
-    success_rate = successes / max(n_episodes, 1)
     mean_steps = float(by_ep["steps"].mean())
+    mst_success = float(mean_steps_to_success(df))
     mean_total_reward = float(by_ep["total_reward"].mean())
     mean_final_distance = float(by_ep["final_z_norm"].mean())
     mean_min_distance = float(by_ep["min_z_norm"].mean())
@@ -123,8 +127,9 @@ def _summarize_rollouts(rollouts_path: Path, action_freq_path: Path) -> dict[str
         "n_episodes": n_episodes,
         "successes": successes,
         "failures": failures,
-        "success_rate": float(success_rate),
+        "success_rate": float(rate),
         "mean_steps": mean_steps,
+        "mean_steps_to_success": mst_success,
         "mean_total_reward": mean_total_reward,
         "mean_final_distance": mean_final_distance,
         "mean_min_distance": mean_min_distance,
@@ -186,6 +191,9 @@ def _format_markdown(
     lines.append(f"| success_rate | **{run_summary['success_rate']:.3f}** |")
     lines.append(f"| successes / failures | {run_summary['successes']} / {run_summary['failures']} |")
     lines.append(f"| mean_steps | {run_summary['mean_steps']:.2f} |")
+    mst = run_summary.get("mean_steps_to_success")
+    mst_display = "nan" if mst is None or math.isnan(float(mst)) else f"{float(mst):.2f}"
+    lines.append(f"| mean_steps_to_success | {mst_display} |")
     lines.append(f"| mean_total_reward | {run_summary['mean_total_reward']:.3f} |")
     lines.append(f"| mean_final_distance | {run_summary['mean_final_distance']:.3f} |")
     lines.append(f"| mean_min_distance | {run_summary['mean_min_distance']:.3f} |")
@@ -221,7 +229,7 @@ def _format_markdown(
             if kind:
                 lines.append(f"- random policy_kind: `{kind}`")
         lines.append("")
-        lines.append("| metric | run | random | Δ (run − random) |")
+        lines.append("| metric | run | random | delta (run - random) |")
         lines.append("| --- | --- | --- | --- |")
         lines.append(
             f"| success_rate | {run_summary['success_rate']:.3f} | "

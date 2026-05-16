@@ -15,7 +15,6 @@ import types
 import numpy as np
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Synthetic fixture helpers (module-level, no conftest changes needed)
 # ---------------------------------------------------------------------------
@@ -704,3 +703,65 @@ class TestAblationRecommend:
         rec = recommend(rows)
         assert rec["setup"] == "keep_baseline"
         assert rec["fallback_invoked"] is True
+
+
+# ---------------------------------------------------------------------------
+# TestRLMetrics
+# ---------------------------------------------------------------------------
+
+
+class TestRLMetrics:
+    def _rollouts_polars(self):
+        pl = pytest.importorskip("polars")
+        return pl.DataFrame({
+            "episode_id": [0, 0, 1, 1, 2, 2, 3],
+            "step": [0, 1, 0, 1, 0, 1, 0],
+            "terminated": [False, True, False, True, False, False, True],
+            "success": [False, True, False, False, None, None, None],
+        })
+
+    def test_success_rate_polars_uses_terminal_rows_only(self) -> None:
+        from src.analysis.metrics import success_rate
+
+        # Episodes: 0 succeeds, 1 fails, 2 has no terminal row, 3 terminal null -> false.
+        assert success_rate(self._rollouts_polars()) == pytest.approx(0.25)
+
+    def test_mean_steps_to_success_polars_counts_rows_to_terminal_success(self) -> None:
+        from src.analysis.metrics import mean_steps_to_success
+
+        assert mean_steps_to_success(self._rollouts_polars()) == pytest.approx(2.0)
+
+    def test_pandas_dataframe_supported(self) -> None:
+        pd = pytest.importorskip("pandas")
+        from src.analysis.metrics import mean_steps_to_success, success_rate
+
+        df = pd.DataFrame({
+            "episode_id": [0, 0, 1],
+            "step": [10, 11, 10],
+            "terminated": [False, True, True],
+            "success": [False, True, False],
+        })
+        assert success_rate(df) == pytest.approx(0.5)
+        assert mean_steps_to_success(df) == pytest.approx(2.0)
+
+    def test_empty_rollouts_and_no_successes(self) -> None:
+        pl = pytest.importorskip("polars")
+        from src.analysis.metrics import mean_steps_to_success, success_rate
+
+        empty = pl.DataFrame({
+            "episode_id": [],
+            "step": [],
+            "terminated": [],
+            "success": [],
+        })
+        assert success_rate(empty) == 0.0
+        assert np.isnan(mean_steps_to_success(empty))
+
+        failed = pl.DataFrame({
+            "episode_id": [0, 1],
+            "step": [0, 0],
+            "terminated": [True, True],
+            "success": [False, False],
+        })
+        assert success_rate(failed) == 0.0
+        assert np.isnan(mean_steps_to_success(failed))

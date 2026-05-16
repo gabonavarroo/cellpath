@@ -82,10 +82,5 @@ def noop_embedding(d_emb: int, device: Any = "cpu") -> torch.Tensor:
     -------
     torch.Tensor
         Shape ``(d_emb,)`` zeros.
-
-    Raises
-    ------
-    NotImplementedError
-        Agent B: trivially return ``torch.zeros(d_emb, device=device)``.
     """
-    raise NotImplementedError("Agent B: torch.zeros(d_emb, device=device). Trivial helper.")
+    return torch.zeros(int(d_emb), device=device)

@@ -93,16 +93,73 @@ def load_gene_panels(panel_dir: str | Path) -> dict[str, list[str]]:
         )
         return panels
 
-    for txt in sorted(panel_dir.glob("*.txt")):
-        genes = [
-            line.strip() for line in txt.read_text().splitlines()
-            if line.strip() and not line.startswith("#")
-        ]
+    for txt in sorted(panel_dir.rglob("*.txt")):
+        if txt.name.startswith("."):
+            continue
+        genes = []
+        seen: set[str] = set()
+        for line in txt.read_text().splitlines():
+            gene = line.strip()
+            if not gene or gene.startswith("#"):
+                continue
+            if gene not in seen:
+                genes.append(gene)
+                seen.add(gene)
         if genes:
             panels[txt.stem] = genes
             log.info("Loaded panel '%s': %d genes", txt.stem, len(genes))
 
     return panels
+
+
+def load_gene_panel_manifest(
+    panel_dir: str | Path,
+    required_collections: tuple[str, ...] = (),
+) -> dict[str, dict[str, Any]]:
+    """Load curated panel provenance metadata from ``manifest.json``.
+
+    The manifest is intentionally small and project-local. It documents where each
+    committed V1 panel came from and which broad collection it belongs to
+    (currently ``hallmark`` and ``lineage``). Missing required collections raise a
+    clear error so evaluation cannot silently regress to DepMap essentials only.
+    """
+    panel_dir = Path(panel_dir)
+    manifest_path = panel_dir / "manifest.json"
+    if not manifest_path.exists():
+        if required_collections:
+            raise ValueError(
+                f"Panel manifest not found at {manifest_path}; required collections: "
+                f"{', '.join(required_collections)}"
+            )
+        return {}
+
+    manifest = json.loads(manifest_path.read_text())
+    panel_entries = manifest.get("panels", [])
+    if not isinstance(panel_entries, list):
+        raise ValueError(f"Panel manifest {manifest_path} must contain a 'panels' list.")
+
+    by_name: dict[str, dict[str, Any]] = {}
+    collections: set[str] = set()
+    for entry in panel_entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Panel manifest entry must be an object: {entry!r}")
+        name = entry.get("name")
+        collection = entry.get("collection")
+        if not name or not collection:
+            raise ValueError(
+                f"Panel manifest entries require at least 'name' and 'collection': {entry!r}"
+            )
+        by_name[str(name)] = dict(entry)
+        collections.add(str(collection))
+
+    missing = set(required_collections) - collections
+    if missing:
+        raise ValueError(
+            f"Panel manifest {manifest_path} missing required collections: "
+            f"{', '.join(sorted(missing))}"
+        )
+
+    return by_name
 
 
 def run_depmap_enrichment(
@@ -113,6 +170,7 @@ def run_depmap_enrichment(
     top_k: int = 20,
     n_null: int = 1_000,
     expression_mean_per_gene: dict[str, float] | None = None,
+    panel_sources: dict[str, dict[str, Any]] | None = None,
     out_path: str | Path | None = None,
 ) -> Any:
     """Full DepMap enrichment pipeline.
@@ -150,7 +208,8 @@ def run_depmap_enrichment(
     polars.DataFrame
         One row per (panel, test). Columns:
         ``panel``, ``test``, ``p_value``, ``q_value`` (BH-FDR),
-        ``effect_size``, ``null_z_score``, ``null_empirical_p``, ``details_json``.
+        ``effect_size``, ``null_z_score``, ``null_empirical_p``,
+        ``panel_source``, ``null_strategy``, ``status``, ``details_json``.
     """
     import polars as pl
     from statsmodels.stats.multitest import multipletests
@@ -164,8 +223,9 @@ def run_depmap_enrichment(
     # ------------------------------------------------------------------
     # 1. Select top-K genes by RL action frequency
     # ------------------------------------------------------------------
+    bg_set = set(background_genes)
     sorted_genes = sorted(rl_action_freq, key=lambda g: -rl_action_freq[g])
-    selected = [g for g in sorted_genes[:top_k] if g in set(background_genes)]
+    selected = [g for g in sorted_genes[:top_k] if g in bg_set]
     log.info("Top-%d RL genes: %s", top_k, selected[:10])
 
     # ------------------------------------------------------------------
@@ -176,21 +236,46 @@ def run_depmap_enrichment(
     )
     all_panels = {"depmap_k562_essentials": essential_genes}
     all_panels.update(panels)
+    all_panel_sources: dict[str, dict[str, Any]] = {
+        "depmap_k562_essentials": {
+            "collection": "depmap",
+            "source": "DepMap K562 Chronos essentials",
+            "criterion": "is_essential / Chronos < -0.5",
+        }
+    }
+    if panel_sources:
+        all_panel_sources.update(panel_sources)
     log.info("Panels: %s", list(all_panels.keys()))
 
     # ------------------------------------------------------------------
     # 3. Build GSEA score vector (action frequency, aligned to background)
     # ------------------------------------------------------------------
-    bg_set = set(background_genes)
     gsea_scores = np.array(
         [float(rl_action_freq.get(g, 0)) for g in background_genes],
         dtype=np.float64,
     )
 
     # Expression mean vector aligned to background (for expression-matched null)
-    expr_vec: list[float] | None = None
+    expr_vec: np.ndarray | None = None
+    expr_fallback_reason: str | None = None
     if expression_mean_per_gene is not None:
-        expr_vec = [float(expression_mean_per_gene.get(g, 0.0)) for g in background_genes]
+        expr_vals: list[float] = []
+        missing_expr: list[str] = []
+        for g in background_genes:
+            val = expression_mean_per_gene.get(g)
+            if val is None or not np.isfinite(float(val)):
+                missing_expr.append(g)
+            else:
+                expr_vals.append(float(val))
+        if missing_expr:
+            expr_fallback_reason = (
+                f"expression means missing or non-finite for {len(missing_expr)} "
+                "background genes"
+            )
+        else:
+            expr_vec = np.asarray(expr_vals, dtype=np.float64)
+    else:
+        expr_fallback_reason = "expression means unavailable; using size-matched null"
 
     # ------------------------------------------------------------------
     # 4. Run tests for each panel
@@ -198,40 +283,82 @@ def run_depmap_enrichment(
     rows: list[dict[str, Any]] = []
 
     for panel_name, panel_genes in all_panels.items():
+        panel_genes_dedup = list(dict.fromkeys(panel_genes))
         panel_in_bg = [g for g in panel_genes if g in bg_set]
+        panel_source = json.dumps(
+            all_panel_sources.get(panel_name, {"source": "untracked"}),
+            sort_keys=True,
+        )
+        common = {
+            "panel": panel_name,
+            "panel_source": panel_source,
+            "n_panel_genes": len(panel_genes_dedup),
+            "n_panel_in_background": len(set(panel_in_bg)),
+        }
         if not panel_in_bg:
-            log.warning("Panel '%s': no genes overlap with background — skipping.", panel_name)
+            log.warning("Panel '%s': no genes overlap with background — reporting NA.", panel_name)
+            rows.append({
+                **common,
+                "test": "not_tested",
+                "p_value": None,
+                "effect_size": None,
+                "null_z_score": None,
+                "null_empirical_p": None,
+                "null_strategy": "not_applicable",
+                "status": "no_background_overlap",
+                "details_json": json.dumps({
+                    "reason": "no panel genes overlap with background universe",
+                    "honesty": (
+                        "DepMap panels are plausibility evidence only, not biological validation."
+                    ),
+                }),
+            })
             continue
 
         log.info("Testing panel '%s' (%d genes in background)...", panel_name, len(panel_in_bg))
+        null_strategy = "expression_matched" if expr_vec is not None else "size_matched"
 
         # a. Hypergeometric
         hyper = hypergeometric_enrichment(selected, panel_in_bg, background_genes)
         null_h = null_enrichment_comparison(
             hyper["log_odds"], selected, background_genes,
             n_null_samples=n_null,
-            match_expression=np.array(expr_vec) if expr_vec else None,
+            match_expression=expr_vec,
+            gene_set=panel_in_bg,
         )
         rows.append({
-            "panel":           panel_name,
+            **common,
             "test":            "hypergeometric",
             "p_value":         hyper["p_value"],
             "effect_size":     hyper["log_odds"],
             "null_z_score":    null_h["z_score"],
             "null_empirical_p": null_h["empirical_p"],
-            "details_json":    json.dumps({**hyper, **{f"null_{k}": v for k, v in null_h.items()}}),
+            "null_strategy":   null_strategy,
+            "status":          "ok",
+            "details_json":    json.dumps({
+                **hyper,
+                **{f"null_{k}": v for k, v in null_h.items()},
+                "null_strategy": null_strategy,
+                "null_fallback_reason": expr_fallback_reason,
+                "honesty": "DepMap is plausibility evidence only, not biological validation.",
+            }),
         })
 
         # b. GSEA preranked
         gsea = gsea_preranked(background_genes, gsea_scores, panel_in_bg)
         rows.append({
-            "panel":           panel_name,
+            **common,
             "test":            "gsea_preranked",
             "p_value":         gsea["p_value"],
             "effect_size":     gsea["NES"],
             "null_z_score":    float("nan"),
             "null_empirical_p": gsea["fdr"],
-            "details_json":    json.dumps(gsea),
+            "null_strategy":   "permutation_gsea",
+            "status":          "ok",
+            "details_json":    json.dumps({
+                **gsea,
+                "honesty": "DepMap is plausibility evidence only, not biological validation.",
+            }),
         })
 
     if not rows:
@@ -241,18 +368,38 @@ def run_depmap_enrichment(
     # ------------------------------------------------------------------
     # 5. Benjamini-Hochberg FDR correction across all rows
     # ------------------------------------------------------------------
+    q_vals: list[float | None] = [None] * len(rows)
+    valid_idx: list[int] = []
+    valid_p: list[float] = []
+    for i, row in enumerate(rows):
+        p_val = row.get("p_value")
+        if p_val is None:
+            continue
+        p_float = float(p_val)
+        if np.isfinite(p_float):
+            valid_idx.append(i)
+            valid_p.append(p_float)
+    if valid_p:
+        _, corrected, _, _ = multipletests(valid_p, method="fdr_bh")
+        for row_idx, q_val in zip(valid_idx, corrected, strict=True):
+            q_vals[row_idx] = float(q_val)
+    for row, q_val in zip(rows, q_vals, strict=True):
+        row["q_value"] = q_val
+
     df = pl.DataFrame(rows)
-    p_vals = df["p_value"].to_numpy()
-    _, q_vals, _, _ = multipletests(p_vals, method="fdr_bh")
-    df = df.with_columns(pl.Series("q_value", q_vals.tolist()))
 
     # Reorder columns
     df = df.select([
         "panel", "test", "p_value", "q_value",
-        "effect_size", "null_z_score", "null_empirical_p", "details_json",
+        "effect_size", "null_z_score", "null_empirical_p",
+        "panel_source", "n_panel_genes", "n_panel_in_background",
+        "null_strategy", "status", "details_json",
     ])
 
-    n_sig = int((df["q_value"] < 0.05).sum())
+    n_sig = (
+        int(df.filter(pl.col("q_value").is_not_null() & (pl.col("q_value") < 0.05)).height)
+        if valid_p else 0
+    )
     log.info(
         "Enrichment complete: %d rows, %d significant (q < 0.05).",
         len(df), n_sig,
@@ -316,7 +463,7 @@ def _chronos_group_stats(
     median_c = float(np.median(vals))
     frac_ess = float(np.mean([1 if c < -0.5 else 0 for c in vals]))
     total_wt = sum(wts)
-    weighted_mean = float(sum(c * w for c, w in zip(vals, wts)) / total_wt) if total_wt > 0 else None
+    weighted_mean = float(sum(c * w for c, w in zip(vals, wts, strict=True)) / total_wt) if total_wt > 0 else None
 
     return {
         "n": n_total,
@@ -574,12 +721,10 @@ def run_depmap_comparison(
                 ct.append(int(freq.get(g, 1)))
         return sc, ct
 
-    ppo_det_sc, ppo_det_ct = _scores_and_counts(ppo_det_top, ppo_det_clean)
-    ppo_stoch_sc, ppo_stoch_ct = _scores_and_counts(ppo_stoch_top, ppo_stoch_clean)
-    random_sc, random_ct = _scores_and_counts(random_top, random_clean)
+    ppo_det_sc, _ppo_det_ct = _scores_and_counts(ppo_det_top, ppo_det_clean)
+    ppo_stoch_sc, _ppo_stoch_ct = _scores_and_counts(ppo_stoch_top, ppo_stoch_clean)
+    random_sc, _random_ct = _scores_and_counts(random_top, random_clean)
     act_sc, _ = _scores_and_counts(act_list, {})
-
-    all_sc = [c for c in chron_lookup.values() if c is not None]
 
     # ------------------------------------------------------------------
     # Group statistics — counts must be aligned with chronos_scores (including Nones)
@@ -637,7 +782,7 @@ def run_depmap_comparison(
         "note": (
             "DepMap plausibility check — NOT validation of biological reprogramming. "
             "CRISPRa (gain-of-function) ≠ DepMap CRISPR/RNAi (loss-of-function). "
-            "More negative Chronos = stronger K562 dependency (essential threshold: Chronos < −0.5)."
+            "More negative Chronos = stronger K562 dependency (essential threshold: Chronos < -0.5)."
         ),
         "top_k": top_k,
         "n_permutations": n_permutations,
@@ -764,7 +909,7 @@ def _build_comparison_table_md(summary: dict[str, Any]) -> str:
         "",
         "## Group Chronos statistics",
         "",
-        f"| group | n (with DepMap) | mean Chronos | median Chronos | frac essential | weighted mean | p vs random (MWU) | q (BH-FDR) |",
+        "| group | n (with DepMap) | mean Chronos | median Chronos | frac essential | weighted mean | p vs random (MWU) | q (BH-FDR) |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         _row(f"PPO det top-{top_k}", stats["ppo_det_top_k"],
              mw_pr.get("p_value"), mw_pr.get("q_value_bh")),

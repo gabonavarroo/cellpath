@@ -73,7 +73,7 @@ experiments with Hydra, and the ablation matrix planned for the 14-day budget.
 |---|---|---|---|
 | `rl.action_space.enable_knockout` | false | bool | If true, requires CRISPRi dataset (errors otherwise) |
 | `rl.reference.source` | `unperturbed_k562` | `unperturbed_k562 \| external_healthy` | Reward target (only first implemented) |
-| `rl.reference.epsilon_percentile` | 90 | 80 / 90 / 95 / 99 | Percentile of ‖z_ctrl − z_ref‖ used for ε_success |
+| `rl.reference.epsilon_percentile` | 50 | 50 / 80 / 90 / 95 / 99 | V1 canonical p50 threshold for ε_success; p90 is reference provenance only |
 | `rl.env.max_steps` | 10 | 5 / 10 / 20 | Episode budget K |
 | `rl.env.start_state` | `random_perturbation` | `random_perturbation \| specific \| uniform_latent` | Starting state strategy |
 | `rl.env.repeat_mask` | true | bool | Mask already-used genes |
@@ -137,7 +137,7 @@ Every training script logs the following to TensorBoard from **epoch 1**:
 - `vae/reconstruction_loss`
 - Histograms: `vae/z_mean`, `vae/z_var` (post-warmup)
 - Scalar: `vae/library_size_mean` (sanity)
-- Scalar: `vae/epsilon_success` (computed once at end of training)
+- Scalar: `vae/epsilon_success` (computed once at end of training; V1 canonical artifact is p50)
 
 ### Dynamics
 - `dyn/loss_total`, `dyn/loss_nll`, `dyn/loss_combo`
@@ -249,7 +249,7 @@ Total P0: **11 runs**.
 | ID | Component | Variable | Values | Total runs |
 |---|---|---|---|---|
 | AB-04 | RL | `K` (max steps) | 5 / 10 / 20 | 3 |
-| AB-05 | RL | `epsilon_percentile` | 80 / 90 / 95 | 3 |
+| AB-05 | RL | `epsilon_percentile` | 50 / 80 / 90 / 95 | 4 |
 | AB-06 | Dynamics | `lambda_combo` | 0.0 / 0.5 / 1.0 | 3 |
 
 Total P0 + P1: **20 runs**.

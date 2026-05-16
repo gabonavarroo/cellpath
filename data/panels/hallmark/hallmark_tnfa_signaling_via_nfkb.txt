@@ -1,0 +1,11 @@
+# MSigDB Hallmark TNFA Signaling via NFKB concept, V1 curated subset.
+JUN
+FOSB
+IRF1
+CEBPB
+DUSP9
+SGK1
+ZC3HAV1
+NFKBIA
+TNFAIP3
+IER3

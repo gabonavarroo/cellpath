@@ -31,6 +31,17 @@ class TestDynamicsConstruction:
         assert model.log_var_min < model.log_var_max
 
 
+class TestEmbeddingHelpers:
+    def test_noop_embedding_is_zero_vector_on_requested_device(self) -> None:
+        torch = _torch_or_skip()
+        from src.models.embeddings import noop_embedding
+
+        emb = noop_embedding(7, device="cpu")
+        assert emb.shape == (7,)
+        assert emb.device.type == "cpu"
+        assert torch.count_nonzero(emb).item() == 0
+
+
 class TestDynamicsForward:
     """Forward-pass tests — all implemented for Day 0."""
 
@@ -151,6 +162,7 @@ class TestDynamicsLosses:
         torch = _torch_or_skip()
         import numpy as np
         from torch.utils.data import DataLoader, TensorDataset
+
         from src.models.dynamics import PerturbationDynamicsModel, heteroscedastic_nll
 
         data     = np.load(mock_pairs_npz)
@@ -342,7 +354,7 @@ class TestDynamicsFlags:
         with torch.no_grad():
             l_out = legacy(z, g)
             e_out = explicit(z, g)
-        for a, b in zip(l_out, e_out):
+        for a, b in zip(l_out, e_out, strict=True):
             assert torch.equal(a, b), (
                 "both-flags-False output diverged from the legacy default — "
                 "the no-flag and flags=False code paths must be operationally identical."
@@ -387,7 +399,7 @@ class TestHybridLoss:
         )
 
     def test_lambda_positive_pulls_mu_toward_target(self) -> None:
-        """A few gradient steps with the hybrid loss must reduce ||mu − target||²."""
+        """A few gradient steps with the hybrid loss must reduce ||mu - target||^2."""
         torch = _torch_or_skip()
         from src.models.dynamics import PerturbationDynamicsModel, heteroscedastic_nll
 
@@ -413,7 +425,7 @@ class TestHybridLoss:
             opt.step()
 
         assert errors[-1] < errors[0], (
-            f"Hybrid loss did not reduce ||mu − target||²: {errors[0]:.4f} → {errors[-1]:.4f}"
+            f"Hybrid loss did not reduce ||mu - target||^2: {errors[0]:.4f} -> {errors[-1]:.4f}"
         )
 
 

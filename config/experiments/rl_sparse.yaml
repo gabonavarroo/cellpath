@@ -1,3 +1,4 @@
+# @package _global_
 # config/experiments/rl_sparse.yaml — ablate λ_sparse ∈ {0.01, 0.05, 0.1}.
 #
 # Run as multirun:

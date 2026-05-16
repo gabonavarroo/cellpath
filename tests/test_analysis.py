@@ -12,7 +12,6 @@ from typing import Any
 import numpy as np
 import pytest
 
-
 # =============================================================================
 # hypergeometric_enrichment
 # =============================================================================
@@ -206,6 +205,38 @@ class TestLoadGenePanels:
         panels = load_gene_panels(tmp_path / "nonexistent")
         assert panels == {}
 
+    def test_loads_nested_panel_dirs(self, tmp_path: Any) -> None:
+        from src.analysis.depmap_validation import load_gene_panels
+
+        hallmark = tmp_path / "hallmark"
+        lineage = tmp_path / "lineage"
+        hallmark.mkdir()
+        lineage.mkdir()
+        (hallmark / "hallmark_apoptosis.txt").write_text("BAX\nBAK1\nBCL2L11\n")
+        (lineage / "k562_myeloid_lineage.txt").write_text("KLF1\nSPI1\nCEBPA\n")
+
+        panels = load_gene_panels(tmp_path)
+
+        assert panels["hallmark_apoptosis"] == ["BAX", "BAK1", "BCL2L11"]
+        assert panels["k562_myeloid_lineage"] == ["KLF1", "SPI1", "CEBPA"]
+
+    def test_required_panel_collections_surface_missing(self, tmp_path: Any) -> None:
+        from src.analysis.depmap_validation import load_gene_panel_manifest
+
+        (tmp_path / "manifest.json").write_text(json.dumps({
+            "panels": [
+                {
+                    "name": "hallmark_apoptosis",
+                    "file": "hallmark_apoptosis.txt",
+                    "collection": "hallmark",
+                    "source": "synthetic",
+                }
+            ]
+        }))
+
+        with pytest.raises(ValueError, match="lineage"):
+            load_gene_panel_manifest(tmp_path, required_collections=("hallmark", "lineage"))
+
 
 # =============================================================================
 # depmap_validation: run_depmap_enrichment (synthetic)
@@ -277,6 +308,58 @@ class TestRunDepmapEnrichment:
         q = df["q_value"].to_numpy()
         assert (q >= 0).all() and (q <= 1).all()
 
+    def test_multi_panel_rows_include_provenance_and_null_strategy(self) -> None:
+        from src.analysis.depmap_validation import run_depmap_enrichment
+
+        bg = [f"G{i}" for i in range(50)]
+        freq = {f"G{i}": 50 - i for i in range(50)}
+        panels = {
+            "hallmark_apoptosis": ["G0", "G1", "G2", "G3"],
+            "k562_myeloid_lineage": ["G10", "G11", "G12", "G13"],
+        }
+        panel_sources = {
+            "hallmark_apoptosis": {"collection": "hallmark", "source": "MSigDB synthetic"},
+            "k562_myeloid_lineage": {"collection": "lineage", "source": "curated synthetic"},
+        }
+
+        df = run_depmap_enrichment(
+            rl_action_freq=freq,
+            background_genes=bg,
+            panels=panels,
+            panel_sources=panel_sources,
+            chronos_df=self._mock_chronos_df(),
+            top_k=10,
+            n_null=30,
+            expression_mean_per_gene={g: float(i) for i, g in enumerate(bg)},
+        )
+
+        assert {"panel_source", "n_panel_genes", "n_panel_in_background", "null_strategy", "status"}.issubset(df.columns)
+        assert set(df["panel"].to_list()) >= {
+            "depmap_k562_essentials",
+            "hallmark_apoptosis",
+            "k562_myeloid_lineage",
+        }
+        strategies = set(df["null_strategy"].to_list())
+        assert "expression_matched" in strategies
+
+    def test_empty_panel_is_reported_not_silently_dropped(self) -> None:
+        from src.analysis.depmap_validation import run_depmap_enrichment
+
+        bg = [f"G{i}" for i in range(20)]
+        freq = {f"G{i}": 20 - i for i in range(20)}
+        df = run_depmap_enrichment(
+            rl_action_freq=freq,
+            background_genes=bg,
+            panels={"empty_overlap_panel": ["NOT_IN_BACKGROUND"]},
+            chronos_df=self._mock_chronos_df(),
+            top_k=5,
+            n_null=10,
+        )
+
+        row = df.filter(df["panel"] == "empty_overlap_panel").to_dicts()[0]
+        assert row["status"] == "no_background_overlap"
+        assert row["p_value"] is None
+
 
 # =============================================================================
 # trajectory: load_rollouts schema validation
@@ -320,6 +403,7 @@ class TestLoadRollouts:
 
     def test_missing_columns_raises(self, tmp_path: Any) -> None:
         import polars as pl
+
         from src.analysis.trajectory import load_rollouts
 
         bad = tmp_path / "bad.parquet"
@@ -354,7 +438,7 @@ class TestProjectRollouts:
         df = pl.DataFrame({
             "episode_id": [0] * n,
             "step": list(range(n)),
-            "z_vector": [v for v in z_vecs],
+            "z_vector": list(z_vecs),
         })
         result = project_rollouts_to_umap(df, reducer)
         assert "umap_x" in result.columns

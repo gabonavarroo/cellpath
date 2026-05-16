@@ -1,0 +1,11 @@
+# Project-curated K562 erythroid lineage plausibility panel.
+KLF1
+SLC4A1
+BPGM
+LYL1
+RUNX1T1
+CBFA2T3
+GATA1
+TAL1
+ALAS2
+HBB

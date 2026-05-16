@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Committed V1 panels are used for plausibility screening only, not biological validation.",
+    "Hallmark files are small V1 subsets derived from MSigDB Hallmark concepts; they are not a full MSigDB redistribution.",
+    "Lineage files are project-curated K562/hematopoietic/leukemia plausibility panels for MVP reporting."
+  ],
+  "panels": [
+    {
+      "name": "hallmark_apoptosis",
+      "file": "hallmark/hallmark_apoptosis.txt",
+      "collection": "hallmark",
+      "source": "MSigDB Hallmark Apoptosis concept, V1 curated subset",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "hallmark_e2f_targets",
+      "file": "hallmark/hallmark_e2f_targets.txt",
+      "collection": "hallmark",
+      "source": "MSigDB Hallmark E2F Targets concept, V1 curated subset",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "hallmark_g2m_checkpoint",
+      "file": "hallmark/hallmark_g2m_checkpoint.txt",
+      "collection": "hallmark",
+      "source": "MSigDB Hallmark G2M Checkpoint concept, V1 curated subset",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "hallmark_myc_targets_v1",
+      "file": "hallmark/hallmark_myc_targets_v1.txt",
+      "collection": "hallmark",
+      "source": "MSigDB Hallmark MYC Targets V1 concept, V1 curated subset",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "hallmark_tnfa_signaling_via_nfkb",
+      "file": "hallmark/hallmark_tnfa_signaling_via_nfkb.txt",
+      "collection": "hallmark",
+      "source": "MSigDB Hallmark TNFA Signaling via NFKB concept, V1 curated subset",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "k562_erythroid_lineage",
+      "file": "lineage/k562_erythroid_lineage.txt",
+      "collection": "lineage",
+      "source": "Project-curated K562 erythroid lineage plausibility panel",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "k562_myeloid_lineage",
+      "file": "lineage/k562_myeloid_lineage.txt",
+      "collection": "lineage",
+      "source": "Project-curated hematopoietic/myeloid lineage plausibility panel",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "leukemia_stem_cell_program",
+      "file": "lineage/leukemia_stem_cell_program.txt",
+      "collection": "lineage",
+      "source": "Project-curated leukemia stem/progenitor plausibility panel",
+      "coverage": "curated_subset"
+    },
+    {
+      "name": "cml_mapk_stress_program",
+      "file": "lineage/cml_mapk_stress_program.txt",
+      "collection": "lineage",
+      "source": "Project-curated CML/MAPK stress plausibility panel",
+      "coverage": "curated_subset"
+    }
+  ]
+}

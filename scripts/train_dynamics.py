@@ -208,6 +208,7 @@ def main(cfg: DictConfig) -> int:
     from src.models.dynamics import (
         PerturbationDynamicsModel,
         composition_loss,
+        fit_ridge_baseline_from_pairs,
         heteroscedastic_nll,
     )
     from src.utils.device import device_summary, get_device
@@ -327,6 +328,12 @@ def main(cfg: DictConfig) -> int:
                     f"use_gene_delta_bias: saved="
                     f"{bool(saved.get('use_gene_delta_bias', False))}  current={current_gene_bias}"
                 )
+            current_ror = bool(cfg.dynamics.get("use_residual_over_ridge", False))
+            if bool(saved.get("use_residual_over_ridge", False)) != current_ror:
+                mismatches.append(
+                    f"use_residual_over_ridge: saved="
+                    f"{bool(saved.get('use_residual_over_ridge', False))}  current={current_ror}"
+                )
         if mismatches:
             raise RuntimeError(
                 f"Checkpoint at {model_path} is incompatible with current data:\n"
@@ -343,23 +350,48 @@ def main(cfg: DictConfig) -> int:
     # ------------------------------------------------------------------
     # Step 7 — build model (always, whether training or loading checkpoint)
     # ------------------------------------------------------------------
-    use_state_linear_skip = bool(cfg.dynamics.get("use_state_linear_skip", False))
-    use_gene_delta_bias   = bool(cfg.dynamics.get("use_gene_delta_bias",   False))
+    use_state_linear_skip   = bool(cfg.dynamics.get("use_state_linear_skip",   False))
+    use_gene_delta_bias     = bool(cfg.dynamics.get("use_gene_delta_bias",     False))
+    use_residual_over_ridge = bool(cfg.dynamics.get("use_residual_over_ridge", False))
     model = PerturbationDynamicsModel(
-        n_latent              = n_latent,
-        n_genes               = n_genes,
-        d_emb                 = int(cfg.dynamics.d_emb),
-        n_hidden              = int(cfg.dynamics.n_hidden),
-        n_layers              = int(cfg.dynamics.n_layers),
-        dropout               = float(cfg.dynamics.dropout),
-        activation            = str(cfg.dynamics.activation),
-        log_var_min           = float(cfg.dynamics.log_var_min),
-        log_var_max           = float(cfg.dynamics.log_var_max),
-        log_var_init_bias     = float(cfg.dynamics.log_var_init_bias),
-        use_layernorm         = bool(cfg.dynamics.use_layernorm),
-        use_state_linear_skip = use_state_linear_skip,
-        use_gene_delta_bias   = use_gene_delta_bias,
+        n_latent                = n_latent,
+        n_genes                 = n_genes,
+        d_emb                   = int(cfg.dynamics.d_emb),
+        n_hidden                = int(cfg.dynamics.n_hidden),
+        n_layers                = int(cfg.dynamics.n_layers),
+        dropout                 = float(cfg.dynamics.dropout),
+        activation              = str(cfg.dynamics.activation),
+        log_var_min             = float(cfg.dynamics.log_var_min),
+        log_var_max             = float(cfg.dynamics.log_var_max),
+        log_var_init_bias       = float(cfg.dynamics.log_var_init_bias),
+        use_layernorm           = bool(cfg.dynamics.use_layernorm),
+        use_state_linear_skip   = use_state_linear_skip,
+        use_gene_delta_bias     = use_gene_delta_bias,
+        use_residual_over_ridge = use_residual_over_ridge,
     ).to(device)
+
+    # P0D Track A — fit ridge baseline on train pairs and assign to model buffers.
+    # Done once before training starts. The fitted coefficients are written to
+    # ``ridge_baseline.npz`` for audit; they are also part of model.state_dict via
+    # registered buffers, so reload-without-refit is automatic.
+    if use_residual_over_ridge and not skip_training:
+        ridge_z_ctrl   = train_np["z_ctrl"].astype(np.float32)
+        ridge_gene_idx = train_np["gene_idx"]
+        ridge_delta    = (train_np["z_pert"].astype(np.float32)
+                          - train_np["z_ctrl"].astype(np.float32))
+        log.info("Fitting ridge baseline for residual-over-ridge (M=%d, n_genes=%d) …",
+                 len(ridge_z_ctrl), n_genes)
+        W_z, W_gene, b = fit_ridge_baseline_from_pairs(
+            ridge_z_ctrl, ridge_gene_idx, ridge_delta, n_genes,
+        )
+        with torch.no_grad():
+            model.ridge_W_z.copy_(torch.from_numpy(W_z).to(device))
+            model.ridge_W_gene.copy_(torch.from_numpy(W_gene).to(device))
+            model.ridge_b.copy_(torch.from_numpy(b).to(device))
+        # Audit dump
+        ridge_npz_path = dynamics_dir / "ridge_baseline.npz"
+        np.savez(ridge_npz_path, W_z=W_z, W_gene=W_gene, b=b, n_genes=n_genes)
+        log.info("ridge_baseline.npz written → %s", ridge_npz_path)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(
@@ -728,9 +760,10 @@ def main(cfg: DictConfig) -> int:
             "log_var_min"           : float(cfg.dynamics.log_var_min),
             "log_var_max"           : float(cfg.dynamics.log_var_max),
             "use_layernorm"         : bool(cfg.dynamics.use_layernorm),
-            "use_state_linear_skip" : use_state_linear_skip,
-            "use_gene_delta_bias"   : use_gene_delta_bias,
-            "trained_on"            : trained_on,
+            "use_state_linear_skip"  : use_state_linear_skip,
+            "use_gene_delta_bias"    : use_gene_delta_bias,
+            "use_residual_over_ridge": use_residual_over_ridge,
+            "trained_on"             : trained_on,
             "epochs_run"            : epochs_run,
             "best_epoch"            : best_nll_epoch,   # backward-compat alias
             "best_nll_epoch"        : best_nll_epoch,
@@ -937,10 +970,11 @@ def main(cfg: DictConfig) -> int:
                 "log_var_min"          : float(cfg.dynamics.log_var_min),
                 "log_var_max"          : float(cfg.dynamics.log_var_max),
                 "use_layernorm"        : bool(cfg.dynamics.use_layernorm),
-                "use_state_linear_skip": use_state_linear_skip,
-                "use_gene_delta_bias"  : use_gene_delta_bias,
-                "trained_on"           : trained_on,
-                "epochs_run"           : 0,
+                "use_state_linear_skip"  : use_state_linear_skip,
+                "use_gene_delta_bias"    : use_gene_delta_bias,
+                "use_residual_over_ridge": use_residual_over_ridge,
+                "trained_on"             : trained_on,
+                "epochs_run"             : 0,
                 "best_epoch"           : 0,
                 "best_val_nll"         : None,
                 "final_val_nll"        : None,

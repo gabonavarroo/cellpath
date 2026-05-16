@@ -6,6 +6,81 @@
 
 ---
 
+## Session 2026-05-16-2300  (agent: research-lead)
+
+**Phase:** P0D — V1 OT Hardening (dual-track, dynamics + RL)
+**Status:** Implemented residual-over-ridge architecture (`use_residual_over_ridge` flag) in
+`src/models/dynamics.py` + `fit_ridge_baseline_from_pairs` helper; wired into
+`scripts/train_dynamics.py` and `config/dynamics.yaml`. Implemented `reward_mode` ∈
+{`absolute_distance`, `delta_distance`, `terminal_only_step_cost`} in `src/rl/reward.py` with
+`prev_distance` plumbing through `src/rl/environment.py`. Added `src/rl/curriculum.py`
+(`DistanceCurriculumCallback`) and wired into `src/rl/train_ppo.py`. Updated
+`config/rl.yaml` with reward-mode + curriculum knobs. 14 new tests (8 RoR, 8 reward-mode,
+5 curriculum), 252 passed / 2 skipped (no regressions).
+
+Track A (3 RoR variants on V1 OT pairs, gate-honest attempt):
+- A1 (RoR, λ=0.0):    val margin +0.0127, OOD margin +0.0716, beam 17/17, best 1.483
+- A2 (RoR, λ=0.05):   val margin +0.0135, OOD margin +0.0759, beam 17/17, best 1.512
+- A3 (RoR, λ=0.10):   val margin +0.0136, OOD margin +0.0771, beam 17/17, best 1.510
+
+Track A acceptance: **FAILED** (gate not closed). Improvement +0.005-0.006 over V1 baseline
+(+0.0074) — confirms the OT-pairing-noise ceiling. Reachability preserved (17/17 across all).
+
+Track B (5 PPO retraining variants on V1 OT, K=3, ε=p25, primary cell n=200):
+- B1 (abs, 200k):                PPO=0.410, PPO−rand=+0.27, PPO−grd=−0.59, mean_d=6.14
+- B2 (delta, 200k):              PPO=0.000, PPO−rand=−0.14, PPO−grd=−1.00, mean_d=4.48 (REJECTED)
+- B3 (terminal, 500k):           PPO=1.000, PPO−rand=+0.86, PPO−grd=+0.00, mean_d=2.87
+- B4 (terminal+curriculum, 500k):PPO=1.000, PPO−rand=+0.86, PPO−grd=+0.00, mean_d=2.77
+- B5 (terminal+curriculum, 1M):  PPO=1.000, PPO−rand=+0.86, PPO−grd=+0.00, mean_d=**2.55** ← winner
+
+At K=3 / bin 6–8: B5 PPO = 0.995 > greedy_dyn_1 = 0.985 → **first V2 evidence of PPO > one-step
+greedy** (+0.010 pp).
+
+Hypothesis verdicts:
+- H_RoR_gate:      REJECTED (all RoR fail to close gate to +0.030)
+- H_delta_reward:  REJECTED (delta-distance gives 0.000 at primary cell)
+- H_curriculum:    REJECTED (variance reduction −2.3 %, threshold was ≥30 %)
+- H_gate_vs_control: STRONGLY SUPPORTED (3 anchors: V1 OT gate-fail / control-pass; soft-OT
+  gate-pass / control-fail; V1 OT+RoR gate-improve / control-preserve)
+
+Track C **skipped** per §5.10 rollback rule (no Track-A run passed acceptance).
+
+**Recommendation:** Promote V1 OT dynamics + B5 PPO (terminal_only_step_cost reward + curriculum
+at 1M timesteps) to V2 primary in a separate session. Document gate-control decoupling as the
+key V2 finding.
+
+**Metrics:**
+| Component | Target | Current | Status |
+| --- | --- | --- | --- |
+| RoR best val margin | ≥ +0.030 | +0.0136 (A3) | FAIL (improved from V1 baseline +0.0074) |
+| RoR beam reachability | ≥ 13/17 | 17/17 (all variants) | PASS |
+| RoR OOD Pearson | ≥ 0.40 | 0.516 (A3) | PASS |
+| Track B primary cell PPO | ≥ V1 baseline (1.000) | 1.000 (B3/B4/B5) | PASS |
+| Track B PPO − random | ≥ +0.50 pp | +0.86 pp (B5) | PASS |
+| Track B PPO − greedy_dyn_1 at K=3 / bin 6-8 | ≥ 0 pp | +0.010 pp (B5) | PASS |
+
+**Committed (code only):** `src/models/dynamics.py` (RoR + fit_ridge_baseline_from_pairs),
+`scripts/train_dynamics.py` (ridge fit-and-assign + config persistence + reload check),
+`src/analysis/gate_breakdown.py` (RoR loader), `src/rl/environment.py` (RoR loader + prev_distance
+plumbing + set_start_pool + reward_mode wiring), `src/rl/reward.py` (reward modes),
+`src/rl/curriculum.py` (NEW), `src/rl/train_ppo.py` (callback wiring),
+`config/{dynamics.yaml, rl.yaml}` (new flags), `tests/{test_dynamics.py, test_reward.py,
+test_curriculum.py (NEW)}`.
+
+**Artifacts (local, not committed):** `artifacts_v2/dynamics_v1ot_ror{,_corr005,_corr010}`,
+`artifacts_v2/reachability_probe_p0d_trackA`, `artifacts_v2/diagnostics/gate_breakdown_*`,
+`artifacts_v2/rl_v1ot_{abs_k3_200k,delta_k3_200k,terminal_k3_500k,terminal_curriculum_k3_500k,
+terminal_curriculum_k3_1M}`, `artifacts_v2/eval_rl_v1ot_*`,
+`artifacts_v2/interpretation_p0d_v1ot_hardening.md`.
+
+**Blockers:** none
+**Next:**
+1. Separate session: promote V1 OT + B5 to V2 primary, rerun full hard benchmark for headlines.
+2. Optional: seed sweep on B5 (3 seeds) for variance bounds on the headline number.
+3. Defer to V3: contraction regulariser, ensemble dynamics, FiLM, CRISPRi, external-healthy.
+
+---
+
 ## Session 2026-05-16-2100  (agent: research-lead)
 
 **Phase:** P0B2 — Mean-delta dynamics + correlation loss

@@ -17,6 +17,11 @@ dynamics:
   #   (≈0.26-0.29 vs 0.479 for state_linear alone); rejected as default.
   use_state_linear_skip: true         # mu += Linear(z); gene-independent skip
   use_gene_delta_bias: false          # mu += GeneDelta[gene_idx]; disabled — causes OOD collapse
+  # P0D Track A — residual-over-ridge. When true, the MLP predicts only the residual on top of
+  # a frozen ridge baseline fit at training start. Mutually exclusive with use_state_linear_skip
+  # (the ridge already includes the linear-in-z term). The trainer writes ridge_baseline.npz
+  # into the run dir for audit.
+  use_residual_over_ridge: false
 
   # Checkpoint selection.
   # Allowed values: "val_nll" | "gate_margin".

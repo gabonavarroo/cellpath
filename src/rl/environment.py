@@ -87,6 +87,8 @@ class CellReprogrammingEnv(gym.Env):
         success_bonus: float = 0.0,
         failure_penalty: float = 0.0,
         seed: int | None = None,
+        reward_mode: str = "absolute_distance",
+        beta_step_cost: float = 0.05,
     ) -> None:
         super().__init__()
 
@@ -103,6 +105,8 @@ class CellReprogrammingEnv(gym.Env):
         self.distance_metric = str(distance_metric)
         self.success_bonus = float(success_bonus)
         self.failure_penalty = float(failure_penalty)
+        self.reward_mode = str(reward_mode)
+        self.beta_step_cost = float(beta_step_cost)
         self._start_pool = (
             np.asarray(start_pool_latents, dtype=np.float32)
             if start_pool_latents is not None
@@ -198,6 +202,10 @@ class CellReprogrammingEnv(gym.Env):
                 truncated=truncated,
                 is_success=is_success,
                 distance_metric=self.distance_metric,
+                reward_mode=self.reward_mode,
+                prev_distance=d,  # NO-OP: pre-step and post-step state are identical
+                beta_step_cost=self.beta_step_cost,
+                step_idx=self._step_idx,
             )
 
             # Mask not relevant on terminal step; leave it consistent
@@ -211,6 +219,9 @@ class CellReprogrammingEnv(gym.Env):
             return self._z.copy(), reward, terminated, truncated, info
 
         # --- Gene action: apply dynamics, update repeat-mask ---
+        # Capture pre-step distance for delta_distance reward.
+        d_prev = float(distance_to_reference(self._z, self.z_ref, metric=self.distance_metric))
+
         # gene_idx is 1-indexed in dynamics (0 reserved for ctrl placeholder)
         gene_idx = action + 1
 
@@ -261,6 +272,10 @@ class CellReprogrammingEnv(gym.Env):
             truncated=truncated,
             is_success=is_success,
             distance_metric=self.distance_metric,
+            reward_mode=self.reward_mode,
+            prev_distance=d_prev,
+            beta_step_cost=self.beta_step_cost,
+            step_idx=self._step_idx,
         )
 
         self._current_mask = self._compute_mask()
@@ -275,6 +290,14 @@ class CellReprogrammingEnv(gym.Env):
     def action_masks(self) -> np.ndarray:
         """Return the current action mask for MaskablePPO."""
         return self._current_mask.copy()
+
+    def set_start_pool(self, pool: np.ndarray) -> int:
+        """Replace the start-state pool. Used by the distance curriculum callback.
+
+        Returns the new pool size.
+        """
+        self._start_pool = np.asarray(pool, dtype=np.float32)
+        return int(len(self._start_pool))
 
     # ------------------------------------------------------------------ #
     # Helpers
@@ -366,8 +389,9 @@ def _load_dynamics_model(cfg: Any, *, allow_untrained: bool = False) -> Any:
             ("log_var_min",           -5.0),
             ("log_var_max",           3.0),
             ("log_var_init_bias",     -2.0),
-            ("use_state_linear_skip", False),
-            ("use_gene_delta_bias",   False),
+            ("use_state_linear_skip",   False),
+            ("use_gene_delta_bias",     False),
+            ("use_residual_over_ridge", False),
         ]:
             if opt_key in accepted:
                 kwargs[opt_key] = dyn_cfg.get(opt_key, opt_default)
@@ -522,6 +546,8 @@ def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
             success_bonus=float(reward_cfg.success_bonus),
             failure_penalty=float(reward_cfg.failure_penalty),
             seed=int(np.random.default_rng().integers(0, 2**31 - 1)),
+            reward_mode=str(reward_cfg.get("mode", "absolute_distance")),
+            beta_step_cost=float(reward_cfg.get("beta_step_cost", 0.05)),
         )
 
     return factory

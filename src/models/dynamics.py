@@ -82,6 +82,17 @@ class PerturbationDynamicsModel(nn.Module):
         offset, functionally equivalent to the "per-gene mean Δ" baseline absorbed into the
         model. Row 0 is initialized to all-zeros at construction so the ctrl-placeholder
         index is a true no-op at init. Default ``False``.
+    use_residual_over_ridge
+        If ``True``, the dynamics MLP predicts a *residual* on top of a frozen ridge baseline
+        ``μ = ridge(z, gene) + mlp_residual(z, gene_emb)``. Three buffers are registered:
+        ``ridge_W_z`` ``(n_latent, n_latent)``, ``ridge_W_gene`` ``(n_genes + 1, n_latent)``
+        (row 0 = zeros for the ctrl placeholder), and ``ridge_b`` ``(n_latent,)``. The trainer
+        is responsible for fitting the ridge baseline on train pairs once and assigning the
+        coefficients to these buffers before optimisation starts. The buffers are saved as
+        part of ``state_dict`` so reload is automatic. The ``head_mu`` weight + bias are
+        zero-initialised when this flag is enabled so that the MLP begins at the ridge
+        prediction. Mutually exclusive with ``use_state_linear_skip`` — both raise
+        ``ValueError`` if set together. Default ``False``.
 
     Examples
     --------
@@ -108,8 +119,14 @@ class PerturbationDynamicsModel(nn.Module):
         use_layernorm: bool = True,
         use_state_linear_skip: bool = False,
         use_gene_delta_bias: bool = False,
+        use_residual_over_ridge: bool = False,
     ) -> None:
         super().__init__()
+        if bool(use_state_linear_skip) and bool(use_residual_over_ridge):
+            raise ValueError(
+                "use_state_linear_skip and use_residual_over_ridge are mutually exclusive: "
+                "the ridge baseline already includes a linear-in-z term."
+            )
         self.n_latent = n_latent
         self.n_genes = n_genes
         self.d_emb = d_emb
@@ -117,6 +134,7 @@ class PerturbationDynamicsModel(nn.Module):
         self.log_var_max = log_var_max
         self.use_state_linear_skip = bool(use_state_linear_skip)
         self.use_gene_delta_bias = bool(use_gene_delta_bias)
+        self.use_residual_over_ridge = bool(use_residual_over_ridge)
 
         _act_map = {"silu": nn.SiLU, "relu": nn.ReLU, "gelu": nn.GELU}
         if activation not in _act_map:
@@ -160,6 +178,19 @@ class PerturbationDynamicsModel(nn.Module):
             with torch.no_grad():
                 self.gene_delta.weight[0].zero_()
 
+        # Optional residual-over-ridge: register three buffers and zero-init head_mu so
+        # the model starts at the ridge prediction. The trainer overwrites the buffers
+        # before optimisation; this construction sets them to zeros so the model is
+        # well-defined even before fit-and-assign.
+        if self.use_residual_over_ridge:
+            self.register_buffer("ridge_W_z",    torch.zeros(n_latent, n_latent))
+            self.register_buffer("ridge_W_gene", torch.zeros(n_genes + 1, n_latent))
+            self.register_buffer("ridge_b",      torch.zeros(n_latent))
+            # Zero-init the MLP mu head so the MLP starts as the identity-on-ridge residual.
+            with torch.no_grad():
+                self.head_mu.weight.zero_()
+                self.head_mu.bias.zero_()
+
     def forward(
         self,
         z: torch.Tensor,
@@ -194,11 +225,81 @@ class PerturbationDynamicsModel(nn.Module):
             mu = mu + self.state_linear(z)             # gene-independent linear skip
         if self.gene_delta is not None:
             mu = mu + self.gene_delta(gene_idx)        # per-gene additive offset
+        if self.use_residual_over_ridge:
+            # ridge_pred = z @ W_z + W_gene[gene_idx] + b
+            ridge_pred = z @ self.ridge_W_z + self.ridge_W_gene[gene_idx] + self.ridge_b
+            mu = mu + ridge_pred                       # MLP learns the ridge residual
         log_var = self.head_log_var(h).clamp(
             self.log_var_min, self.log_var_max
         )                                              # (B, n_latent)
         z_next = z + mu                                # residual connection
         return z_next, mu, log_var
+
+
+def fit_ridge_baseline_from_pairs(
+    z_ctrl: "np.ndarray",
+    gene_idx: "np.ndarray",
+    delta: "np.ndarray",
+    n_genes: int,
+    *,
+    alpha: float = 1.0,
+    random_state: int = 42,
+) -> tuple["np.ndarray", "np.ndarray", "np.ndarray"]:
+    """Fit the gate's ridge baseline and split it into RoR buffer-shaped numpy arrays.
+
+    Delegates to :func:`src.analysis.metrics._fit_ridge_baseline` (single source of truth,
+    CLAUDE.md rule 4) and unpacks ``ridge.coef_`` + ``ridge.intercept_`` into three arrays
+    sized for the ``PerturbationDynamicsModel`` buffers when ``use_residual_over_ridge=True``.
+
+    The fitted ridge predicts ``Δz = X @ coef_.T + intercept_`` where ``X = [z_ctrl, one_hot]``.
+    We reshape into:
+      * ``W_z``    ``(n_latent, n_latent)``     — so that ``z @ W_z = X[:, :n_latent] @ coef_[:, :n_latent].T``.
+      * ``W_gene`` ``(n_genes + 1, n_latent)``  — row 0 = zeros (ctrl placeholder, matches
+        Contract-2 gene_idx=0 convention); rows 1..n_genes carry the per-gene one-hot weight.
+      * ``b``      ``(n_latent,)``              — the ridge intercept.
+
+    Parameters
+    ----------
+    z_ctrl, delta
+        Each ``(M, n_latent)``. ``delta = z_pert - z_ctrl``.
+    gene_idx
+        Shape ``(M,)`` int, 1-indexed per Contract 2.
+    n_genes
+        One-hot width. Must match the dynamics model's ``n_genes``.
+    alpha, random_state
+        Forwarded to the ridge fit (defaults match the gate baseline at alpha=1.0).
+
+    Returns
+    -------
+    W_z : np.ndarray
+        Shape ``(n_latent, n_latent)`` — ready for ``z @ W_z``.
+    W_gene : np.ndarray
+        Shape ``(n_genes + 1, n_latent)`` — embedding-style lookup; row 0 = zeros.
+    b : np.ndarray
+        Shape ``(n_latent,)`` — the ridge intercept.
+    """
+    import numpy as np  # local import keeps the module's numpy dependency private to this fn
+    from src.analysis.metrics import _fit_ridge_baseline
+
+    ridge = _fit_ridge_baseline(z_ctrl, gene_idx, delta, n_genes,
+                                alpha=alpha, random_state=random_state)
+    coef = np.asarray(ridge.coef_, dtype=np.float32)        # (n_latent, n_latent + n_genes)
+    intercept = np.asarray(ridge.intercept_, dtype=np.float32)  # (n_latent,)
+    n_latent = int(coef.shape[0])
+    if coef.shape[1] != n_latent + n_genes:
+        raise ValueError(
+            f"Ridge coefficient width {coef.shape[1]} != n_latent + n_genes "
+            f"({n_latent + n_genes}). Did n_genes change between fit and assignment?"
+        )
+
+    # z-block: ridge predicts z @ coef[:, :n_latent].T. We want z @ W_z, so W_z = coef[:, :n_latent].T.
+    W_z = coef[:, :n_latent].T.astype(np.float32, copy=True)              # (n_latent, n_latent)
+    # gene-block: one_hot @ coef[:, n_latent:].T → picks one column per row. We store as
+    # (n_genes + 1, n_latent) with row 0 = zeros (ctrl placeholder), rows 1..n_genes from coef.
+    W_gene = np.zeros((n_genes + 1, n_latent), dtype=np.float32)
+    W_gene[1:] = coef[:, n_latent:].T.astype(np.float32, copy=True)       # (n_genes, n_latent)
+    b = intercept.astype(np.float32, copy=True)                            # (n_latent,)
+    return W_z, W_gene, b
 
 
 def heteroscedastic_nll(

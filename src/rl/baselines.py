@@ -74,6 +74,48 @@ class GreedyDynamicsPolicy:
         return _argmin_distance(candidates, self.z_ref)
 
 
+class NoopFreeGreedyPolicy:
+    """Greedy 1-step dynamics policy that never picks noop.
+
+    Identical to GreedyDynamicsPolicy but excludes noop_idx from candidates.
+    Probes whether the dynamics field is navigable when the agent is forced
+    to apply gene perturbations at every step (no early termination).
+    Falls back to noop only if ALL gene actions are masked.
+    """
+    name = "greedy_dyn_1_noop_free"
+
+    def __init__(self, dynamics: Any, *, n_genes: int, z_ref: np.ndarray, noop_idx: int) -> None:
+        self.dynamics = dynamics
+        self.n_genes = int(n_genes)
+        self.z_ref = np.asarray(z_ref, dtype=np.float32)
+        self.noop_idx = int(noop_idx)
+
+    def select_action(self, z: np.ndarray, mask: np.ndarray, info: dict[str, Any]) -> int:
+        import torch
+
+        z = np.asarray(z, dtype=np.float32)
+        valid = _valid_actions(mask)
+        gene_actions = np.array([a for a in valid if 0 <= a < self.n_genes], dtype=np.int64)
+        if len(gene_actions) == 0:
+            return self.noop_idx  # only safe fallback when all genes are masked
+        candidates: dict[int, np.ndarray] = {}
+        z_batch = np.repeat(z[None, :], len(gene_actions), axis=0)
+        gene_idx = gene_actions + 1  # 0-indexed action → 1-indexed gene_idx
+        with torch.no_grad():
+            out = self.dynamics(
+                torch.from_numpy(z_batch).float(),
+                torch.from_numpy(gene_idx.astype(np.int64)).long(),
+            )
+        z_next = out[0] if isinstance(out, tuple) else out
+        if isinstance(z_next, torch.Tensor):
+            z_next_np = z_next.detach().cpu().numpy().astype(np.float32)
+        else:
+            z_next_np = np.asarray(z_next, dtype=np.float32)
+        for action, zn in zip(gene_actions, z_next_np, strict=True):
+            candidates[int(action)] = zn
+        return _argmin_distance(candidates, self.z_ref)
+
+
 class RidgeGreedyPolicy:
     name = "ridge_greedy"
 

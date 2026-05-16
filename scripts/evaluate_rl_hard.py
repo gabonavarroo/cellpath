@@ -16,6 +16,7 @@ from src.rl.baselines import (
     AlwaysNoopPolicy,
     GreedyDynamicsPolicy,
     MeanDeltaGreedyPolicy,
+    NoopFreeGreedyPolicy,
     RandomUniformValidPolicy,
     RidgeGreedyPolicy,
 )
@@ -296,6 +297,8 @@ def _policy_names(
         names.append("always_noop")
     if "greedy_dyn_1" in baseline_names:
         names.append("greedy_dyn_1")
+    if "greedy_dyn_1_noop_free" in baseline_names:
+        names.append("greedy_dyn_1_noop_free")
     if "ridge_greedy" in baseline_names:
         names.append("ridge_greedy")
     if "mean_delta_greedy" in baseline_names:
@@ -453,6 +456,10 @@ def main(argv: list[str] | None = None) -> int:
                         policies["always_noop"] = AlwaysNoopPolicy(noop_idx)
                     if "greedy_dyn_1" in baseline_names:
                         policies["greedy_dyn_1"] = GreedyDynamicsPolicy(
+                            dynamics_model, n_genes=n_genes, z_ref=z_ref, noop_idx=noop_idx,
+                        )
+                    if "greedy_dyn_1_noop_free" in baseline_names:
+                        policies["greedy_dyn_1_noop_free"] = NoopFreeGreedyPolicy(
                             dynamics_model, n_genes=n_genes, z_ref=z_ref, noop_idx=noop_idx,
                         )
                     if "ridge_greedy" in baseline_names:

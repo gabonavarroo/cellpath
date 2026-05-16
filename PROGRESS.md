@@ -6,6 +6,47 @@
 
 ---
 
+## Session 2026-05-16-2100  (agent: research-lead)
+
+**Phase:** P0B2 — Mean-delta dynamics + correlation loss
+**Status:** Implemented `correlation_loss` in `src/analysis/metrics.py`, wired `lambda_corr` into
+`scripts/train_dynamics.py` and `config/dynamics.yaml`. Trained λ ∈ {0.05, 0.10, 0.30}. All
+three variants fail the gate. Ran reachability probe and focused hard benchmark on best variant
+(λ=0.30). **Gate cannot be closed with correlation loss alone** — bottleneck is dim-11 OOD
+generalization failure intrinsic to mean-delta pairing. Recommendation: escalate to Option C1
+(retrain PPO on V1 OT dynamics with bin 8–10 curriculum).
+
+**Metrics:**
+| Variant | Val margin | OOD Pearson | OOD dim-11 diff | Beam best dist | Hard bench greedy sr |
+| --- | --- | --- | --- | --- | --- |
+| baseline (λ=0.00) | +0.0214 | 0.3833 | -0.253 | 4.114 | 0.000 |
+| λ_corr=0.05 | +0.0225 | 0.3835 | -0.258 | — | — |
+| λ_corr=0.10 | +0.0227 | 0.3836 | -0.255 | — | — |
+| λ_corr=0.30 (best) | +0.0232 | 0.3849 | -0.250 | **4.090** | 0.000 |
+| Threshold | +0.030 | — | ≥0.0 | — | — |
+
+**Root cause:** Ridge Pearson on OOD dim 11 = 0.310 across all λ — this is the hard ceiling for
+the mean-delta pairing on this dimension. The MLP collapses to ~0.06 on OOD dim-11 regardless of
+λ. Correlation loss only affects training-gene distributions; it cannot force OOD generalization.
+
+**Committed:** `src/analysis/metrics.py` (correlation_loss), `scripts/train_dynamics.py`
+(lambda_corr wiring), `config/dynamics.yaml` (lambda_corr default), `tests/test_dynamics.py`
+(TestCorrelationLoss, 4 tests).
+**Artifacts (local, not committed):** `artifacts_v2/dynamics_mean_delta_corr_{005,010,030}/`,
+`artifacts_v2/reachability_probe_p0b2/`, `artifacts_v2/eval_mean_delta_corr030_hard/`,
+`artifacts_v2/interpretation_p0b2_mean_delta_corr.md`.
+
+**Blockers:** none
+**Next:**
+1. **Option C1 (requires explicit approval):** Retrain PPO on V1 OT dynamics with bin 8–10
+   curriculum (`start_epsilon_label=p25` or explicit distance-bin start pool) and ≥1M timesteps.
+   V1 OT dynamics already passes the gate (+0.0074 margin) and supports 100% beam reachability.
+   The gap is purely in PPO training distribution.
+2. Alternative: investigate per-dim loss weighting for dim-11 OOD (Option C2).
+3. Do NOT lower gate thresholds.
+
+---
+
 ## Session 2026-05-16-1800  (agent: research-lead)
 
 **Phase:** P0C0 — Reachability diagnostic (before PPO retrain)

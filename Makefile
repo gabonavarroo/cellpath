@@ -9,7 +9,7 @@ DOCKER ?= docker
 
 .PHONY: help setup data vae pairs dynamics rl evaluate pipeline test lint format \
         docker-build docker-cpu docker-cuda tensorboard clean nuke notebooks \
-        rl-eval rl-random rl-summary
+        rl-eval rl-random rl-summary aggregate visualize depmap-compare
 
 help:  ## Show this help message.
 	@grep -E '^[a-zA-Z_-]+:.*?##' Makefile | awk -F':.*?## ' '{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -72,6 +72,21 @@ rl-random:  ## Run a random-policy baseline matched to PPO eval env. EXTRA= must
 rl-summary:  ## Summarize an RL run dir. Usage: make rl-summary RUN_DIR=path/to/eval_deterministic [RAND_DIR=...].
 	@if [ -z "$(RUN_DIR)" ]; then echo "ERROR: set RUN_DIR=<path>"; exit 2; fi
 	$(PYTHON) scripts/summarize_rl_run.py --run-dir $(RUN_DIR) $(if $(RAND_DIR),--random-baseline-dir $(RAND_DIR))
+
+# ---------------------------------------------------------------------------
+# Phase 5 — aggregation, visualization, full evaluate.
+# ---------------------------------------------------------------------------
+
+aggregate:  ## Compose artifacts/eval/{summary,results_table,caveats} from existing runs.
+	$(PYTHON) scripts/aggregate_eval.py --config-name $(CONFIG) rl.train.skip_gate=true $(EXTRA)
+
+visualize:  ## Render every defense figure under artifacts/eval/figures/.
+	$(PYTHON) scripts/visualize.py --config-name $(CONFIG) rl.train.skip_gate=true $(EXTRA)
+
+depmap-compare:  ## Run DepMap gene-score comparison (PPO vs random vs action universe).
+	$(PYTHON) scripts/evaluate.py --config-name $(CONFIG) rl.train.skip_gate=true \
+	    +evaluate.skip_aggregate=true +evaluate.skip_latent_quality=true \
+	    +evaluate.skip_depmap=true $(EXTRA)
 
 # ---------------------------------------------------------------------------
 # Quality

@@ -6,6 +6,85 @@
 
 ---
 
+## Session 2026-05-15 — DepMap gene-score comparison
+
+**Phase:** 5 reporting — stronger DepMap cross-validation.
+**Status:** Implemented and run. All acceptance criteria met.
+
+**New artifacts:**
+- `artifacts/eval/depmap_gene_level_scores.csv` — per-gene Chronos scores + group membership flags
+- `artifacts/eval/depmap_comparison_summary.json` — MWU + permutation p-values, group stats, interpretation
+- `artifacts/eval/depmap_comparison_table.md` — defense-ready Markdown report
+- `artifacts/eval/figures/fig_depmap_gene_score_comparison.png` — violin/jitter plot
+
+**Key numbers (top-20, V1 PPO det):**
+| group | n (DepMap) | mean Chronos | weighted mean | frac essential |
+|---|---:|---:|---:|---:|
+| PPO det top-20 | 18 | −0.0845 | **−0.1675** | 0.056 |
+| PPO stoch top-20 | 18 | −0.0845 | −0.1713 | 0.056 |
+| Random top-20 | 20 | −0.0641 | −0.0659 | 0.050 |
+| Action universe | 99 | −0.1120 | −0.1120 | 0.051 |
+
+**Interpretation (honest):**
+- Unweighted MWU PPO det vs random: p=0.336, q=0.504, Cliff's delta=−0.083. **Not significant.**
+- Weighted mean (by action count): PPO −0.168 vs random −0.066. The large difference is driven by CKS1B (count=274, Chronos=−0.337) and HK2 (count=54, Chronos=−0.586 essential). A plausibility signal, not a causal claim.
+- Small top-K sample size (n≈20) limits statistical power. Non-significant results reported as negative evidence, not hidden.
+
+**Tests:** 12 new tests in `tests/test_depmap_compare.py`. Suite total: 194 passed.
+
+**Blockers:** none.
+**Next:** Defense rehearsal.
+
+---
+
+## Session 2026-05-15 — Phase 5 wrap (MVP V1 frozen)
+
+**Phase:** 5 — Reporting + evaluation. Model/env/reward modifications deferred to future work.
+**Status:** Phase 5 deliverables complete. Every required defense artifact is on disk.
+
+**Changes this session:**
+- NEW: `src/analysis/aggregate.py` — pure-function result aggregator (`build_summary`, `build_results_table_md`, `build_caveats_md`).
+- NEW: `scripts/aggregate_eval.py` — Hydra wrapper writing `artifacts/eval/{summary,results_table,caveats}`.
+- MODIFY: `scripts/evaluate.py` — runs aggregator + latent quality + DepMap enrichment.
+- MODIFY: `scripts/visualize.py` — 5 required figures + 2 optional UMAP figures; `+visualize.compute_umap_if_missing=true` fits and caches a UMAP reducer if none exists.
+- MODIFY: `src/pipeline.py` — six `step_*` bodies wired as subprocess calls; `--from <step>` added.
+- MODIFY: `Makefile` — `make aggregate`, `make visualize` targets added.
+- NEW: `tests/test_aggregate.py`, `tests/test_rl_eval_infra.py`, `tests/test_contraction_diagnostic.py`.
+
+**Outputs (all under `artifacts/eval/`):**
+
+| Artifact | Description |
+|---|---|
+| `summary.json` | Composite blob: provenance, RL, dynamics, contraction, top actions |
+| `results_table.md` | Defense-ready Markdown tables (one per section) |
+| `caveats.md` | Four binding constraints + ranked future work |
+| `latent_quality.json` | Silhouette + ARI on perturbation labels |
+| `depmap_enrichment.csv` | RL top-20 genes vs K562 DepMap essentials |
+| `evaluate_report.json` | Top-level index linking all artifacts |
+| `figures/fig_rl_ppo_vs_random.png` | PPO det 0.988 / PPO stoch 0.988 / random 0.840, "+14.8 pp" |
+| `figures/fig_contraction_comparison.png` | fraction_improved + mean_improvement, 32D vs 64D |
+| `figures/fig_dynamics_gate.png` | MLP vs ridge Pearson, primary + OOD, 32D and 64D |
+| `figures/fig_rl_action_freq.png` | Top-15 PPO (CKS1B=274) vs random, overlap: CDKN1A/CELF2/TSC22D1 |
+| `figures/fig_depmap_enrichment.png` | q-value heatmap (both panels q>0.05; non-significant, as expected) |
+
+**Metrics (32D V1 headline):**
+| Metric | Value |
+|---|---:|
+| PPO det success rate | 0.988 |
+| PPO stoch success rate | 0.988 |
+| Random uniform-valid success | 0.840 |
+| PPO Δ vs random | +14.8 pp |
+| Mean steps (PPO det / random) | 2.28 / 5.53 |
+| Dynamics gate margin (32D, val Pearson) | +0.0074 (FAILS threshold +0.030) |
+| Contraction fraction_improved (32D start8 / auto) | 1.0000 / 0.9554 |
+| Latent silhouette | see `latent_quality.json` |
+| DepMap q<0.05 rows | 0 (both tests non-significant; documented in caveats.md) |
+
+**Blockers:** none (gate failed but overridden; surrogate contractive — all documented).
+**Next:** Defense rehearsal. No further code changes pre-defense.
+
+---
+
 ## Session 2026-05-15 — Contraction diagnostics
 
 **Status:** P0B contraction diagnostic implemented and run across 32D/64D dynamics branches.

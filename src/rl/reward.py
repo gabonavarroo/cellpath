@@ -49,6 +49,8 @@ def compute_reward(
     prev_distance: float | None = None,
     beta_step_cost: float = 0.05,
     step_idx: int = 0,
+    hybrid_alpha: float = 1.0,
+    hybrid_terminal_bonus: float = 1.0,
 ) -> float:
     """Scalar reward for one transition.
 
@@ -78,12 +80,17 @@ def compute_reward(
     distance_metric
         ``"l2"`` (default) or ``"cosine"``.
     reward_mode
-        P0D Track B. One of:
+        P0D Track B + P0E Phase 3. One of:
           * ``"absolute_distance"`` (default, V1 behaviour): ``R = -d_next·distance_scale``.
           * ``"delta_distance"``: ``R = (d_prev - d_next)·distance_scale`` — rewards progress
             per step. Requires ``prev_distance`` to be provided.
           * ``"terminal_only_step_cost"``: ``R = 0`` mid-episode; on terminal step,
             ``R = 1·is_success - beta_step_cost·step_idx``.
+          * ``"hybrid_delta_terminal"``: ``R_t = hybrid_alpha · (d_prev - d_next) · distance_scale``
+            (dense progress shaping like delta_distance, scaled by ``hybrid_alpha``);
+            on terminal step, **additionally** add ``hybrid_terminal_bonus`` if ``is_success``.
+            Combines the per-step gradient of delta_distance with the goal-anchored terminal
+            bonus of terminal_only_step_cost. Requires ``prev_distance``.
         ``lambda_sparse``, ``lambda_unc``, ``success_bonus``, ``failure_penalty`` are
         still applied additively as in the absolute_distance mode (they shape, not
         replace, the chosen base reward). The exception is ``terminal_only_step_cost``,
@@ -120,6 +127,14 @@ def compute_reward(
             reward -= float(beta_step_cost) * float(step_idx)
         else:
             reward = 0.0
+    elif reward_mode == "hybrid_delta_terminal":
+        if prev_distance is None:
+            raise ValueError(
+                "reward_mode='hybrid_delta_terminal' requires prev_distance to be provided."
+            )
+        reward = float(hybrid_alpha) * float(distance_scale) * (float(prev_distance) - d_next)
+        if (terminated or truncated) and is_success:
+            reward += float(hybrid_terminal_bonus)
     else:
         raise ValueError(
             f"Unknown reward_mode {reward_mode!r}. Choose from "

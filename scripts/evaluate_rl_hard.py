@@ -299,6 +299,10 @@ def _policy_names(
         names.append("greedy_dyn_1")
     if "greedy_dyn_1_noop_free" in baseline_names:
         names.append("greedy_dyn_1_noop_free")
+    if "greedy_dyn_2" in baseline_names:
+        names.append("greedy_dyn_2")
+    if "greedy_dyn_3" in baseline_names:
+        names.append("greedy_dyn_3")
     if "ridge_greedy" in baseline_names:
         names.append("ridge_greedy")
     if "mean_delta_greedy" in baseline_names:
@@ -461,6 +465,18 @@ def main(argv: list[str] | None = None) -> int:
                     if "greedy_dyn_1_noop_free" in baseline_names:
                         policies["greedy_dyn_1_noop_free"] = NoopFreeGreedyPolicy(
                             dynamics_model, n_genes=n_genes, z_ref=z_ref, noop_idx=noop_idx,
+                        )
+                    if "greedy_dyn_2" in baseline_names:
+                        from src.rl.baselines import GreedyDynamicsBeamPolicy
+                        policies["greedy_dyn_2"] = GreedyDynamicsBeamPolicy(
+                            dynamics_model, n_genes=n_genes, z_ref=z_ref, noop_idx=noop_idx,
+                            depth=2, beam_width=20,
+                        )
+                    if "greedy_dyn_3" in baseline_names:
+                        from src.rl.baselines import GreedyDynamicsBeamPolicy
+                        policies["greedy_dyn_3"] = GreedyDynamicsBeamPolicy(
+                            dynamics_model, n_genes=n_genes, z_ref=z_ref, noop_idx=noop_idx,
+                            depth=3, beam_width=20,
                         )
                     if "ridge_greedy" in baseline_names:
                         policies["ridge_greedy"] = RidgeGreedyPolicy.from_npz(ridge_path, z_ref=z_ref, noop_idx=noop_idx)

@@ -89,6 +89,8 @@ class CellReprogrammingEnv(gym.Env):
         seed: int | None = None,
         reward_mode: str = "absolute_distance",
         beta_step_cost: float = 0.05,
+        hybrid_alpha: float = 1.0,
+        hybrid_terminal_bonus: float = 1.0,
     ) -> None:
         super().__init__()
 
@@ -107,6 +109,8 @@ class CellReprogrammingEnv(gym.Env):
         self.failure_penalty = float(failure_penalty)
         self.reward_mode = str(reward_mode)
         self.beta_step_cost = float(beta_step_cost)
+        self.hybrid_alpha = float(hybrid_alpha)
+        self.hybrid_terminal_bonus = float(hybrid_terminal_bonus)
         self._start_pool = (
             np.asarray(start_pool_latents, dtype=np.float32)
             if start_pool_latents is not None
@@ -206,6 +210,8 @@ class CellReprogrammingEnv(gym.Env):
                 prev_distance=d,  # NO-OP: pre-step and post-step state are identical
                 beta_step_cost=self.beta_step_cost,
                 step_idx=self._step_idx,
+                hybrid_alpha=self.hybrid_alpha,
+                hybrid_terminal_bonus=self.hybrid_terminal_bonus,
             )
 
             # Mask not relevant on terminal step; leave it consistent
@@ -276,6 +282,8 @@ class CellReprogrammingEnv(gym.Env):
             prev_distance=d_prev,
             beta_step_cost=self.beta_step_cost,
             step_idx=self._step_idx,
+            hybrid_alpha=self.hybrid_alpha,
+            hybrid_terminal_bonus=self.hybrid_terminal_bonus,
         )
 
         self._current_mask = self._compute_mask()
@@ -548,6 +556,8 @@ def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
             seed=int(np.random.default_rng().integers(0, 2**31 - 1)),
             reward_mode=str(reward_cfg.get("mode", "absolute_distance")),
             beta_step_cost=float(reward_cfg.get("beta_step_cost", 0.05)),
+            hybrid_alpha=float(reward_cfg.get("hybrid_alpha", 1.0)),
+            hybrid_terminal_bonus=float(reward_cfg.get("hybrid_terminal_bonus", 1.0)),
         )
 
     return factory

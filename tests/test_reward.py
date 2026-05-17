@@ -306,3 +306,71 @@ class TestComputeRewardModes:
         with pytest.raises(ValueError, match="Unknown reward_mode"):
             compute_reward(_zeros(), _zeros(), action=0, noop_idx=10,
                            reward_mode="quadratic")
+
+
+class TestHybridDeltaTerminalReward:
+    """P0E Phase 3 — hybrid_delta_terminal reward mode."""
+
+    def test_hybrid_zero_terminal_matches_delta_distance(self) -> None:
+        """With hybrid_terminal_bonus=0, mid-episode reward equals delta_distance mode."""
+        from src.rl.reward import compute_reward
+        z_next = np.array([1.0] + [0.0] * 31, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        r_delta = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                 reward_mode="delta_distance", prev_distance=5.0,
+                                 lambda_sparse=0.0)
+        r_hybrid = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                  reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                                  hybrid_alpha=1.0, hybrid_terminal_bonus=0.0,
+                                  lambda_sparse=0.0)
+        assert r_hybrid == pytest.approx(r_delta, abs=1e-6)
+
+    def test_hybrid_requires_prev_distance(self) -> None:
+        from src.rl.reward import compute_reward
+        with pytest.raises(ValueError, match="prev_distance"):
+            compute_reward(_zeros(), _zeros(), action=0, noop_idx=10,
+                           reward_mode="hybrid_delta_terminal", prev_distance=None)
+
+    def test_hybrid_terminal_bonus_only_on_success(self) -> None:
+        """The terminal bonus is added only when is_success is True at terminal/truncation."""
+        from src.rl.reward import compute_reward
+        z_next = np.zeros(32, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        # δd = 5 - 0 = 5; bonus added on success.
+        r_success = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                   reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                                   hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                                   terminated=True, is_success=True,
+                                   lambda_sparse=0.0)
+        r_fail = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                                hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                                terminated=True, is_success=False,
+                                lambda_sparse=0.0)
+        r_mid = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                               reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                               hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                               terminated=False, is_success=False,
+                               lambda_sparse=0.0)
+        # All three have the same δd-shaping (5.0). Bonus differs.
+        assert r_success == pytest.approx(5.0 + 2.0, abs=1e-6)
+        assert r_fail    == pytest.approx(5.0, abs=1e-6)
+        assert r_mid     == pytest.approx(5.0, abs=1e-6)
+
+    def test_hybrid_alpha_scales_shaping_only(self) -> None:
+        """Doubling alpha doubles the shaping term but leaves the terminal bonus alone."""
+        from src.rl.reward import compute_reward
+        z_next = np.zeros(32, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        r1 = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                            reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                            hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                            terminated=True, is_success=True,
+                            lambda_sparse=0.0)
+        r2 = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                            reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                            hybrid_alpha=2.0, hybrid_terminal_bonus=2.0,
+                            terminated=True, is_success=True,
+                            lambda_sparse=0.0)
+        # r1 = α·5 + 2 = 7; r2 = 2·5 + 2 = 12 → diff = α·5 = 5
+        assert r2 - r1 == pytest.approx(5.0, abs=1e-6)

@@ -6,6 +6,89 @@
 
 ---
 
+## Session 2026-05-16-0030  (agent: research-lead)
+
+**Phase:** P0E — Combinatorial Hardening (follow-up to P0D)
+**Status:** P0D ended too early on two fronts that the user reasonably challenged. P0E
+implements all six phases of the V2_STRATEGY_P0E_PLAN: (Phase 0) `GreedyDynamicsBeamPolicy`
+multi-step planner baseline (greedy_dyn_2/3); (Phase 1) Track C — B5-style PPO retrained on
+RoR_corr010 dynamics, the step P0D skipped; (Phase 2) mean-delta full RL retraining at K=3
+and K=8; (Phase 3) `hybrid_delta_terminal` reward mode; (Phase 4) K-ablation at K=2 and K=8
+on V1 OT; (Phase 5) full combinatorial evaluation matrix; (Phase 6) interpretation.
+
+All PPO retrains used `rl.train.skip_gate=true` (P0 warning logged). V1 OT fails the gate on
+val margin (+0.0074 vs +0.030) but is the verified-controllable field; RoR_corr010 likewise
+fails the gate (+0.0136) but improves over V1 OT and remains 17/17 beam reachable.
+
+**Verdicts:**
+- **H_planning_baseline: SUPPORTED.** greedy_dyn_2 differs from greedy_dyn_1 in 3 of 6 cells
+  on V1 OT dynamics; it is a meaningfully stronger upper-reference baseline.
+- **H_ror_ppo: PARTIALLY SUPPORTED.** C2 on RoR_corr010 wins K=2/bin 6-8 by +23.5 pp vs B5
+  (0.760 vs 0.525); ties at primary cell (both 1.000); mean_final_distance slightly higher
+  (2.66 vs 2.55). RoR is competitive with V1 OT, not strictly better.
+- **H_meandelta_k8: REJECTED.** All four mean-delta + RL runs (D1, D2, D3 + abs diagnostic)
+  produce 0.000 with NOOP-collapse at training.
+- **H_hybrid_reward: REJECTED.** Default α=1, B=1 → 0.006 at smoke. Diagnostic α=1, B=10 →
+  0.754 training-side but 0.170 on hard-bench primary cell (generalization failure).
+- **H_k_ablation: REJECTED.** F2 (K=8 trained) PPO=0.940 < B5=1.000 at primary cell.
+- **H_planning (overall): REJECTED.** No PPO config exceeds greedy_dyn_2 by ≥ +0.05 pp
+  anywhere in the matrix. The P0D claim "PPO > greedy_dyn_1 at K=3/bin 6-8 by +0.010 pp"
+  downgrades under the stronger baseline: PPO ≈ grd2 at primary; PPO < grd2 at K=3/bin 6-8
+  (−0.005); PPO never exceeds grd2.
+
+**Updated V2 recommendation (compared to P0D's V1 OT × B5):**
+- Promote **RoR_corr010 × C2** for V2 reporting: matches B5 at primary (1.000) AND wins
+  +23.5 pp at K=2/bin 6-8. RoR has higher gate margin (+0.0136 vs V1's +0.0074) and OOD
+  Pearson (0.516 vs 0.479) — cleaner narrative. Beam reachability 17/17 preserved.
+- Honest disclaimer: PPO matches but does not exceed greedy_dyn_2 anywhere on V2 hard bench.
+
+**Metrics (V2 hard bench primary cell, K=3, ε=p25, bin 8-10, OOD, n=200):**
+| Run | PPO | rnd | grd1 | grd2 | PPO−grd1 | PPO−grd2 | mean_d |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| B5 (V1 OT × terminal+curric K=3 1M) | 1.000 | 0.140 | 1.000 | 1.000 | +0.000 | +0.000 | **2.545** |
+| C2 (RoR_corr010 × terminal+curric K=3 1M) | 1.000 | 0.180 | 1.000 | 1.000 | +0.000 | +0.000 | 2.659 |
+| E2 (V1 OT × hybrid α=1, B=10, curric 1M) | 0.170 | 0.140 | 1.000 | 1.000 | -0.830 | -0.830 | 3.612 |
+| F1 (V1 OT × terminal+curric K=2 500k) | 0.860 | 0.140 | 1.000 | 1.000 | -0.140 | -0.140 | 2.897 |
+| F2 (V1 OT × terminal+curric K=8 1M) | 0.940 | 0.140 | 1.000 | 1.000 | -0.060 | -0.060 | 2.892 |
+
+**K=2 bin 8-10 (a B5 weak spot — informative for K=2 generalization):**
+| Run | PPO | grd2 | PPO−grd2 |
+| --- | ---: | ---: | ---: |
+| B5 | 0.295 | 0.740 | -0.445 |
+| C2 (RoR) | 0.290 | 0.290 | +0.000 (saturates RoR's grd2) |
+| F1 (K=2 trained) | **0.600** | 0.740 | -0.140 |
+| F2 (K=8 trained) | 0.695 | 0.740 | -0.045 |
+
+**K=2 bin 6-8:**
+| Run | PPO | grd2 | Notes |
+| --- | ---: | ---: | --- |
+| B5 | 0.525 | 0.650 | |
+| C2 (RoR) | **0.760** | 0.800 | best of all configs |
+| F1 (K=2 trained) | 0.415 | 0.650 | |
+| F2 (K=8 trained) | 0.560 | 0.650 | |
+
+**Committed (code only):** `src/rl/baselines.py` (GreedyDynamicsBeamPolicy),
+`scripts/evaluate_rl_hard.py` (greedy_dyn_2/3 wiring), `src/rl/reward.py` (hybrid_delta_terminal
+mode), `src/rl/environment.py` (hybrid params plumbed), `config/rl.yaml` (hybrid defaults),
+`tests/test_baselines_multistep.py` (NEW, 5 tests), `tests/test_reward.py` (TestHybridDeltaTerminalReward,
+4 tests), `scripts/compare_p0e_matrix.py` (NEW).
+
+**Artifacts (local, not committed):** `artifacts_v2/eval_p0e_b5_extended_with_beam_baselines`,
+`artifacts_v2/eval_p0e_matrix/` (5 runs + comparison.md), `artifacts_v2/rl_v1ot_ror_corr010_*`,
+`artifacts_v2/rl_meandelta_*`, `artifacts_v2/rl_v1ot_hybrid_*`,
+`artifacts_v2/rl_v1ot_terminal_curric_k{2,8}_*`,
+`artifacts_v2/interpretation_p0e_v1ot_hardening.md`.
+
+**Blockers:** none
+**Next:**
+1. Separate session: 3-seed sweep on RoR_corr010 × C2 (and B5 as control) for variance bounds.
+2. Promote whichever wins to V2 primary; rerun full V2 hard benchmark with the seed-sweep
+   median for the headline number.
+3. Defer to V3: contraction-regulariser dynamics loss, ensemble dynamics, FiLM, CRISPRi,
+   per-dim loss weighting, SAC-Discrete.
+
+---
+
 ## Session 2026-05-16-2300  (agent: research-lead)
 
 **Phase:** P0D — V1 OT Hardening (dual-track, dynamics + RL)

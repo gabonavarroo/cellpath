@@ -48,6 +48,10 @@ rl:
     # 1·success - beta_step_cost·step_idx).
     mode: absolute_distance
     beta_step_cost: 0.05              # used only by terminal_only_step_cost mode
+    # P0E Phase 3 — hybrid_delta_terminal mode params.
+    # R_t = hybrid_alpha · (d_prev - d_next); R_T += hybrid_terminal_bonus · 1[success].
+    hybrid_alpha: 1.0
+    hybrid_terminal_bonus: 1.0
 
   # ----- PPO (MaskablePPO from sb3-contrib) -----
   ppo:

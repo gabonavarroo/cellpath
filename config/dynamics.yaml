@@ -10,18 +10,28 @@ dynamics:
   dropout: 0.1
   use_layernorm: true
 
-  # Architecture ablation flags.
-  # use_state_linear_skip: ENABLED — four-way ablation confirmed this improves both val
-  #   Pearson (≈0.608) and OOD Pearson (≈0.479) over the plain MLP baseline; no OOD collapse.
+  # ----- Architecture ablation flags (V2 primary defaults, see V2_FINAL_REPORT.md) -----
+  #
+  # The V2 primary dynamics is `RoR_corr010` = residual-over-ridge + λ_corr=0.10 on V1 OT
+  # pairs. Compared to the V1 default (use_state_linear_skip=true), RoR improves the
+  # validation-gate margin from +0.0074 to +0.0136 (+84 %), the OOD Pearson from 0.479 to
+  # 0.516 (+0.037), and the OOD MLP-minus-ridge margin from +0.040 to +0.077 (+93 %). Beam
+  # reachability (k=3, OOD bin 8-10) is preserved at 17/17 with best_dist 1.51 (vs V1's 1.59).
+  # The supervised gate's +0.030 threshold is NOT closed — this is an OT-pairing-noise
+  # ceiling, not an architectural bug (see V2 finding §1: gate-controllability decoupling).
+  #
+  # use_state_linear_skip: DISABLED — mutually exclusive with use_residual_over_ridge (the
+  #   ridge baseline already encodes the linear-in-z term). To revert to the V1 architecture
+  #   for an apples-to-apples comparison, set use_state_linear_skip=true AND
+  #   use_residual_over_ridge=false.
   # use_gene_delta_bias: DISABLED — per-gene additive offset caused OOD Pearson collapse
   #   (≈0.26-0.29 vs 0.479 for state_linear alone); rejected as default.
-  use_state_linear_skip: true         # mu += Linear(z); gene-independent skip
+  # use_residual_over_ridge: ENABLED — V2 primary architecture (P0D Track A). The MLP
+  #   predicts only the residual on top of a frozen ridge baseline fit at training start;
+  #   the trainer writes ridge_baseline.npz into the run dir for audit.
+  use_state_linear_skip: false        # V2 primary: disabled (mutex with use_residual_over_ridge)
   use_gene_delta_bias: false          # mu += GeneDelta[gene_idx]; disabled — causes OOD collapse
-  # P0D Track A — residual-over-ridge. When true, the MLP predicts only the residual on top of
-  # a frozen ridge baseline fit at training start. Mutually exclusive with use_state_linear_skip
-  # (the ridge already includes the linear-in-z term). The trainer writes ridge_baseline.npz
-  # into the run dir for audit.
-  use_residual_over_ridge: false
+  use_residual_over_ridge: true       # V2 primary: mu = ridge(z, gene) + mlp_residual(z, gene_emb)
 
   # Checkpoint selection.
   # Allowed values: "val_nll" | "gate_margin".
@@ -39,7 +49,10 @@ dynamics:
   # ridge-margin metric relative to lambda=0.0.  Uncertainty head and log_var regularisation
   # are untouched.
   lambda_mse_delta: 0.0
-  lambda_corr: 0.0              # per-dim Pearson correlation loss weight; 0 = disabled
+  # V2 primary uses λ_corr = 0.10 on V1 OT pairs (best of the {0.0, 0.05, 0.10} sweep in P0D
+  # Track A). Improvement vs RoR-only baseline (λ_corr=0.0): val margin +0.0127 → +0.0136
+  # (+7%); OOD margin +0.0716 → +0.0771 (+8%); beam best_dist 1.48 → 1.51 (≈ tied).
+  lambda_corr: 0.10                   # per-dim Pearson correlation loss weight; V2 primary = 0.10
 
   # Write per-epoch gate metrics (val Pearson, ridge Pearson, margin checks, uncertainty)
   # to artifacts/dynamics/epoch_metrics.json.  Adds one dynamics_validation_gate call

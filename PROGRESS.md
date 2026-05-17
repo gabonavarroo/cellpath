@@ -6,6 +6,45 @@
 
 ---
 
+## Session 2026-05-17-0130  (agent: research-lead)
+
+**Phase:** P0F follow-up — V2 primary wired as default Hydra config
+**Status:** Make the V2 primary recommendation (`RoR_corr010 dynamics × C2 PPO`) the
+**default** Hydra composition. Running `make pipeline` (or `python -m src.pipeline run
+--config-name default`) now loads the V2-frozen primary artifacts; running individual
+training entry points produces V2 primary configurations from scratch.
+
+**Changes:**
+
+| File | Change |
+|---|---|
+| `config/dynamics.yaml` | `use_state_linear_skip: true → false`; `use_residual_over_ridge: false → true`; `lambda_corr: 0.0 → 0.10`. Comments updated to reference V2_FINAL_REPORT.md and explain the mutex with `use_state_linear_skip`. |
+| `config/rl.yaml` | `env.max_steps: 10 → 3`; `env.min_start_distance: auto → 4.0`; `env.epsilon_override: null → 3.1662898064` (p25); `reward.mode: absolute_distance → terminal_only_step_cost`; `ppo.total_timesteps: 2_000_000 → 1_000_000`; `train.curriculum.enabled: false → true`; `reference.epsilon_percentile: 50 → 25`. |
+| `config/paths.yaml` | NEW `artifacts_v2` / `artifacts_v3` tier roots. `dynamics_dir` → `artifacts_v2/dynamics_v1ot_ror_corr010`; `rl_dir` → `artifacts_v2/rl_v1ot_ror_corr010_terminal_curric_k3_1M`; `eval_dir` → `artifacts_v2/eval`; `eval_figures_dir` → `artifacts_v2/figures`. NEW `v2_final_report`, `v2_seed_aggregate_dir`. |
+| `config/default.yaml` | Documentation block at top explains the V2 primary composition + the override snippet to reproduce V1. |
+| `tests/test_integration.py::test_v1_epsilon_threshold_is_p50` | Renamed to `test_v2_epsilon_threshold_is_p25_via_override`; asserts `rl.reference.epsilon_percentile == 25` AND `rl.env.epsilon_override == 3.1662898064` AND `vae.epsilon_percentile == 50` (the V1-frozen `epsilon_success.json` is preserved). |
+
+**Verification:** `pytest -q` → 262 passed / 2 skipped (no regressions). `python -m src.pipeline
+run --config-name default --dry-run` resolves cleanly with `rl.ppo.total_timesteps=1000000`.
+
+**Sacred-rule conformance:** V1 artifacts (`artifacts/`, `artifacts_64/`, `artifacts/rl_sweeps/`)
+untouched; V2 frozen primary unchanged; no gate-threshold modification; VAE config and
+`artifacts/vae/epsilon_success.json` (V1-canonical p50) preserved. The RL agent's success
+threshold is overridden at runtime to p25 = 3.166 via `rl.env.epsilon_override` and recorded
+in per-run metadata.json.
+
+**Blockers:** none.
+**Next (V3 first session, separate work):**
+1. Train V3.1: `n_latent=64` scVI with default `gene_likelihood=nb` → `artifacts_v3/vae_n64_nb/`.
+2. Build OT pairs at 64D; train RoR + corr 0.10 dynamics at 64D.
+3. Pre-check reachability (≥10% at K=3 / bin 8-10 OOD), greedy_dyn_2 saturation (< 0.95 if
+   field is harder), and dynamics gate margin.
+4. Retrain B5-style PPO (terminal+curric, K=3, 1M, ε=p25 in 64D-space) on the 64D dynamics.
+5. V3 success criterion: `PPO − greedy_dyn_2 ≥ +0.05 pp` at one V2-equivalent cell or any
+   reachable K=2 cell. If V3.1 fails, fall through to V3.2 (ZINB) or V3.3 (SCANVI 32D).
+
+---
+
 ## Session 2026-05-17-0030  (agent: research-lead)
 
 **Phase:** P0F — V2 Honest Wrap-up (final V2 phase)

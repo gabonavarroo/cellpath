@@ -343,3 +343,54 @@ python scripts/train_dynamics.py \
 - `src/analysis/model_selection.py` — `recommend_checkpoint` decision logic.
 - `scripts/evaluate.py` — runs ablation aggregation.
 - `scripts/visualize.py` — generates the thesis figures listed in §7.
+
+---
+
+## 10. V2 ablation matrix (2026-05-16)
+
+V2 ran a sequence of phases (P0A → P0F). See `artifacts_v2/V2_FINAL_REPORT.md` for the
+headline result and `artifacts_v2/interpretation_p0{a,b_doubleprime,b2,c0,d,e,f_wrapup}.md`
+for per-phase analyses.
+
+### V2 dynamics × pairings
+
+| Run path | Pairing | Architecture | λ_corr | Val margin | Beam k=3 best | Verdict |
+|---|---|---|---:|---:|---:|---|
+| `artifacts/dynamics` | OT (V1) | state_linear | 0.0 | +0.0074 | 1.59 (17/17) | V1 baseline; controllable |
+| `artifacts_v2/dynamics_mean_delta_default` | mean_delta | state_linear | 0.0 | +0.0214 | 4.11 (0/17) | NOT reachable |
+| `artifacts_v2/dynamics_mean_delta_corr_{005,010,030}` | mean_delta | state_linear | 0.05–0.30 | +0.022–+0.023 | 4.09 (0/17) | gate plateau, dead |
+| `artifacts_v2/dynamics_soft_ot_default` | soft_ot | state_linear | 0.0 | **+0.0413** | 16.97 (0/17) | gate PASS, control-hostile |
+| `artifacts_v2/dynamics_random_default` | random | state_linear | 0.0 | −0.009 | (control) | negative control |
+| `artifacts_v2/dynamics_v1ot_ror` | OT | residual-over-ridge | 0.0 | +0.0127 | 1.48 (17/17) | RoR baseline |
+| `artifacts_v2/dynamics_v1ot_ror_corr005` | OT | residual-over-ridge | 0.05 | +0.0135 | 1.51 (17/17) | RoR + corr |
+| `artifacts_v2/dynamics_v1ot_ror_corr010` | OT | residual-over-ridge | 0.10 | **+0.0136** | **1.51 (17/17)** | **V2 primary dynamics** |
+
+### V2 RL / PPO runs
+
+| Run path | Dynamics | Reward | K | TS | Curric. | Primary cell PPO |
+|---|---|---|---:|---:|---|---:|
+| (V1) `artifacts/rl_sweeps/p50_start8_shaped_noopfix_500k` | V1 OT | absolute_distance | 10 | 500k | no | 0.988 at V1 setting (p50/start8/K=10) |
+| B1: `rl_v1ot_abs_k3_200k` | V1 OT | absolute_distance | 3 | 200k | no | 0.410 |
+| B2: `rl_v1ot_delta_k3_200k` | V1 OT | delta_distance | 3 | 200k | no | 0.000 |
+| B3: `rl_v1ot_terminal_k3_500k` | V1 OT | terminal_only_step_cost | 3 | 500k | no | 1.000 |
+| B4: `rl_v1ot_terminal_curriculum_k3_500k` | V1 OT | terminal | 3 | 500k | yes | 1.000 |
+| B5: `rl_v1ot_terminal_curriculum_k3_1M` (4 seeds) | V1 OT | terminal | 3 | 1M | yes | **0.963 ± 0.042** |
+| **C2: `rl_v1ot_ror_corr010_terminal_curric_k3_1M` (4 seeds)** | **RoR_corr010** | terminal | 3 | 1M | yes | **0.941 ± 0.048** — **V2 primary PPO** |
+| E1: `rl_v1ot_hybrid_k3_200k_smoke` | V1 OT | hybrid α=1 B=1 | 3 | 200k | no | 0.006 |
+| E2: `rl_v1ot_hybrid_alpha1_bonus10_curric_k3_1M` | V1 OT | hybrid α=1 B=10 | 3 | 1M | yes | 0.170 (generalisation failure) |
+| F1: `rl_v1ot_terminal_curric_k2_500k` | V1 OT | terminal | 2 | 500k | yes | 0.860 at K=3 (K=2 trainer); 0.600 at K=2/bin 8-10 (+30 pp vs B5 there) |
+| F2: `rl_v1ot_terminal_curric_k8_1M` | V1 OT | terminal | 8 | 1M | yes | 0.940 at K=3 |
+| D1–D3: `rl_meandelta_*` | mean_delta_* | terminal | 3 / 8 | 200k / 500k | no | 0.000 (NOOP-collapse) |
+
+### V2 hardness frontier (4-seed, n=300) — V2 primary configuration
+
+| Cell | PPO 4-seed mean ± std | 95 % CI | grd2 | PPO − grd2 |
+|---|---:|---|---:|---:|
+| K=2 bin 6-8 OOD | 0.748 ± 0.053 | [0.697, 0.800] | 0.790 | −0.042 |
+| K=2 bin 8-10 OOD | 0.283 ± 0.045 | [0.239, 0.328] | 0.300 | −0.017 |
+| K=3 bin 6-8 OOD | 0.998 ± 0.002 | [0.996, 0.999] | 1.000 | −0.002 |
+| **K=3 bin 8-10 OOD (primary)** | **0.941 ± 0.048** | **[0.894, 0.988]** | 1.000 | −0.059 |
+
+**No PPO config exceeds greedy_dyn_2 by ≥ +0.05 pp anywhere.** PPO − random = +77 pp at
+primary cell. See `artifacts_v2/figures/` for visualisations and
+`artifacts_v2/eval_p0f_seed_aggregate/seed_aggregate_success_rate.md` for the full table.

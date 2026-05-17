@@ -6,6 +6,70 @@
 
 ---
 
+## Session 2026-05-17-0030  (agent: research-lead)
+
+**Phase:** P0F — V2 Honest Wrap-up (final V2 phase)
+**Status:** Implemented all 7 phases of `V2_WRAP_OR_V3_PIVOT_PLAN.md`:
+(1) reachability oracle pre-check at K=2 frontier (V1 OT 74%, RoR 88% at bin 6-8;
+    V1 OT 76%, RoR 47% at bin 8-10 — both pass ≥10% threshold);
+(2) 6 new PPO retrains (B5 seeds {0, 1, 7} and C2 seeds {0, 1, 7}; existing seed=42 symlinked
+    as the 4th seed for both configs — 8 total PPOs for the seed sweep);
+(3) hardness frontier eval at K∈{2,3} × bin∈{6-8, 8-10} × OOD, n=300, all 8 PPOs;
+(4) cross-dynamics transfer eval (B5 PPO on RoR dyn; C2 PPO on V1 OT dyn);
+(5) `src/analysis/v2_figures.py` + `scripts/aggregate_v2_seeds.py` + `scripts/make_v2_figures.py`
+    + `tests/test_v2_figures.py` (1 smoke test). All 6 V2 wrap-up figures emitted under
+    `artifacts_v2/figures/`;
+(6) `artifacts_v2/V2_FINAL_REPORT.md`, `artifacts_v2/interpretation_p0f_wrapup.md`,
+    `V3_RESEARCH_PLAN.md` (stub), updated README/PHASES/EXPERIMENTS;
+(7) pytest + V1 artifact check.
+
+All PPO retrains used `rl.train.skip_gate=true` (V1 OT and RoR fail the gate; documented per
+CLAUDE.md §9). No VAE retraining; no V1 artifact modification; no gate-threshold change.
+
+**Verdicts:**
+- **H_seed_robust: SUPPORTED.** B5 vs C2 tied at primary cell within seed CIs (B5
+  0.963 ± 0.042, C2 0.941 ± 0.048); CIs non-overlapping at K=2/bin 6-8 (C2 wins +16 pp).
+- **H_frontier_reveals_gap: SUPPORTED.** PPO − greedy_dyn_2 at the K=2 cells is measurable
+  and non-zero with 95% CIs (B5: −0.078 at K=2/bin 6-8, −0.268 at K=2/bin 8-10).
+- **H_action_diversity: NOT MEASURABLE as stated** — figure emitted for PPO configs but
+  greedy_dyn_2 doesn't produce action_freq.json.
+
+**V2 primary recommendation: `RoR_corr010 × C2 PPO`.**
+- Primary cell (K=3, ε=p25, bin 8-10, OOD, 4 seeds × 300 ep):
+  PPO = **0.941 ± 0.048** (95% CI [0.894, 0.988]); random = 0.170; grd2 = 1.000.
+  PPO − random = **+77 pp**; PPO − grd2 = **−0.059** (matches grd2 within 0.06 pp).
+- K=2 / bin 6-8 frontier: C2 = **0.748 ± 0.053** vs B5 = 0.588 ± 0.024 →
+  **+16 pp with non-overlapping seed CIs**.
+- Cross-dynamics transfer: both PPOs degrade by ≥14 pp on the other field (dynamics-specific
+  controllers, not transferable).
+
+**Honest framing (V2_FINAL_REPORT.md §6):**
+- PPO matches but does not exceed `greedy_dyn_2` anywhere on this benchmark — V2 result is
+  *"PPO has compressed a 2-step lookahead into a feedforward controller without runtime
+  model access"*, NOT *"PPO discovers a superior strategy"*.
+- Gate-controllability decoupling established (soft-OT passes gate, fails control;
+  V1 OT + RoR fail gate, pass control). This is V2's main methodological contribution.
+
+**Committed:** `src/analysis/v2_figures.py`, `scripts/aggregate_v2_seeds.py`,
+`scripts/make_v2_figures.py`, `tests/test_v2_figures.py`,
+`artifacts_v2/V2_FINAL_REPORT.md`, `artifacts_v2/interpretation_p0f_wrapup.md`,
+`V3_RESEARCH_PLAN.md`, README.md, PHASES.md, EXPERIMENTS.md.
+
+**Artifacts (local, not committed):** `artifacts_v2/eval_p0f_b5_seed{42,0,1,7}`,
+`eval_p0f_c2_seed{42,0,1,7}`, `eval_p0f_transfer_{B5_on_RoR, C2_on_V1OT}`,
+`eval_p0f_seed_aggregate/`, `figures/`, `rl_v1ot_terminal_curric_k3_1M_seed{0,1,7}`,
+`rl_v1ot_ror_corr010_terminal_curric_k3_1M_seed{0,1,7}`, `reachability_probe_p0f_k2_*`.
+
+**Blockers:** none. V2 ships.
+**Next (V3, separate session):**
+1. Train 64D NB scVI (V3.1) — expected ~2 h on CPU.
+2. Build mean_delta or OT pairs at 64D; train RoR + corr_010 dynamics.
+3. Pre-check reachability; retrain B5-style PPO at 1M; eval on V2-equivalent grid.
+4. V3 success criterion: PPO − greedy_dyn_2 ≥ +0.05 pp at one V2-equivalent or K=2 cell.
+5. If V3.1 rejects H_V3_latent, pivot to ensemble dynamics or contraction regulariser.
+
+---
+
 ## Session 2026-05-16-0030  (agent: research-lead)
 
 **Phase:** P0E — Combinatorial Hardening (follow-up to P0D)

@@ -36,10 +36,22 @@ class TestHydraConfig:
         assert hydra_cfg.rl.action_space.include_noop is True
         assert hydra_cfg.rl.reference.source == "unperturbed_k562"
 
-    def test_v1_epsilon_threshold_is_p50(self, hydra_cfg) -> None:
-        """V1 intentionally keeps p50 as the canonical RL success threshold."""
+    def test_v2_epsilon_threshold_is_p25_via_override(self, hydra_cfg) -> None:
+        """V2 primary uses ε=p25 for the RL success threshold via ``epsilon_override``.
+
+        The VAE-side `epsilon_percentile=50` is retained because it controls the *stored*
+        `artifacts/vae/epsilon_success.json` (V1-canonical p50=3.531), which must not be
+        mutated. The RL agent's success threshold is overridden at runtime to ε_p25=3.166
+        via `rl.env.epsilon_override` and recorded in per-run metadata.json. See
+        artifacts_v2/V2_FINAL_REPORT.md §3 for the hardness-frontier results at this ε.
+        """
+        # VAE stores the V1-canonical p50 epsilon (unchanged).
         assert hydra_cfg.vae.epsilon_percentile == 50
-        assert hydra_cfg.rl.reference.epsilon_percentile == 50
+        # RL uses p25 (V2 primary).
+        assert hydra_cfg.rl.reference.epsilon_percentile == 25
+        # epsilon_override threads p25 = 3.166 into the env.
+        assert hydra_cfg.rl.env.epsilon_override is not None
+        assert abs(float(hydra_cfg.rl.env.epsilon_override) - 3.1662898064) < 1e-6
 
     def test_data_pipeline_keeps_raw_counts(self, hydra_cfg) -> None:
         """The scVI setup config must point at the counts layer."""

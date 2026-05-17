@@ -5,6 +5,20 @@
 # cfg.paths.* is accessible and the ${paths.*} interpolations resolve correctly.
 # Sacred rule from CLAUDE.md §3: NEVER hardcode paths. If a path is missing here,
 # add it here and reference the new key — do not inline a literal string.
+#
+# ARTIFACT TIERS (2026-05-17, after V2 wrap-up):
+#   * `artifacts/`     — V1 baseline (FROZEN). V1 OT pairs + V1 dynamics + V1 PPO.
+#   * `artifacts_64/`  — V1 64D latent ablation (FROZEN).
+#   * `artifacts_v2/`  — V2 primary + ablations (FROZEN per V2_FINAL_REPORT.md §8).
+#   * `artifacts_v3/`  — V3 working directory (reserved; not used yet).
+#
+# DEFAULT PIPELINE TARGETS (V2 primary):
+#   * VAE / pairs continue to use `artifacts/` (V1 — V2 reuses the V1 OT pairs).
+#   * `dynamics_dir` defaults to the V2-primary RoR+corr0.10 model under `artifacts_v2/`.
+#   * `rl_dir` defaults to the V2-primary B5-style PPO on RoR_corr010 (1 M timesteps).
+#   * `eval_dir` defaults to a V2-specific eval folder.
+# Overrides: `paths.dynamics_dir=artifacts/dynamics paths.rl_dir=artifacts/rl_sweeps/...`
+# to reload V1 checkpoints, or set any of these to a fresh path for a from-scratch retrain.
 
 # Project root (filled by src/utils/paths.py at runtime if needed)
 root: ${oc.env:CELLPATH_ROOT,${hydra:runtime.cwd}}
@@ -23,7 +37,9 @@ replogle_crispri_h5ad: ${paths.data_raw}/replogle_2022_crispri.h5ad  # NOT downl
 healthy_reference_h5ad: ${paths.data_raw}/external_healthy_ref.h5ad   # NOT downloaded by v1
 
 # Artifact layout
-artifacts: ${paths.root}/artifacts
+artifacts:    ${paths.root}/artifacts           # V1 baseline (frozen)
+artifacts_v2: ${paths.root}/artifacts_v2        # V2 primary + ablations (frozen)
+artifacts_v3: ${paths.root}/artifacts_v3        # V3 working dir (reserved)
 
 vae_dir: ${paths.artifacts}/vae
 vae_model_dir: ${paths.vae_dir}/model
@@ -39,7 +55,7 @@ pairs_ood: ${paths.pairs_dir}/ood_pairs.npz
 pairs_combo: ${paths.pairs_dir}/combo_pairs.npz
 pairs_metadata: ${paths.pairs_dir}/metadata.json
 
-dynamics_dir: ${paths.artifacts}/dynamics
+dynamics_dir: ${paths.artifacts_v2}/dynamics_v1ot_ror_corr010   # V2 primary
 dynamics_model: ${paths.dynamics_dir}/model.pt
 dynamics_model_best_nll: ${paths.dynamics_dir}/model_best_nll.pt
 dynamics_model_best_gate: ${paths.dynamics_dir}/model_best_gate.pt
@@ -55,13 +71,17 @@ dynamics_ablation_dir: ${paths.artifacts}/dynamics_ablation
 dynamics_ablation_summary_json: ${paths.dynamics_ablation_dir}/summary.json
 dynamics_ablation_summary_csv: ${paths.dynamics_ablation_dir}/summary.csv
 
-rl_dir: ${paths.artifacts}/rl
+rl_dir: ${paths.artifacts_v2}/rl_v1ot_ror_corr010_terminal_curric_k3_1M   # V2 primary
 rl_ppo_zip: ${paths.rl_dir}/ppo.zip
 rl_rollouts_parquet: ${paths.rl_dir}/rollouts.parquet
 rl_success_curves_png: ${paths.rl_dir}/success_curves.png
 rl_action_freq_json: ${paths.rl_dir}/action_freq.json
 
-eval_dir: ${paths.artifacts}/eval
+eval_dir: ${paths.artifacts_v2}/eval               # V2 eval root (figures, depmap, ablations)
 eval_depmap_csv: ${paths.eval_dir}/depmap_enrichment.csv
-eval_figures_dir: ${paths.eval_dir}/figures
+eval_figures_dir: ${paths.artifacts_v2}/figures    # V2 wrap-up figures live here
 eval_ablations_dir: ${paths.eval_dir}/ablations
+
+# V2 wrap-up output paths
+v2_final_report: ${paths.artifacts_v2}/V2_FINAL_REPORT.md
+v2_seed_aggregate_dir: ${paths.artifacts_v2}/eval_p0f_seed_aggregate

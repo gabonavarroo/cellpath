@@ -1,5 +1,15 @@
 # config/rl.yaml — RL environment + PPO hyperparameters.
 # See ARCHITECTURE.md Concepts 4 + 5 for the why behind these defaults.
+#
+# V2 PRIMARY DEFAULTS (see artifacts_v2/V2_FINAL_REPORT.md):
+#   * V2 hard benchmark cell: K=3, ε=p25 (3.166), distance bin 8-10, OOD held-out genes.
+#   * Reward: terminal_only_step_cost (mid-episode reward = 0; terminal = 1·success - β·t).
+#   * Distance-bin curriculum: linear schedule from start_d=4.0 to end_d=10.0 over first 70 %.
+#   * total_timesteps = 1_000_000 (1 M).
+#   * `min_start_distance: 4.0` so the curriculum has room to expand from easy to hard.
+#   * `skip_gate: true` because V2 V1-OT / RoR-corr010 dynamics fail the gate by design
+#      (OT-pairing-noise ceiling), but ARE controllable (beam reachability 17/17). The
+#      skip is logged in PROGRESS.md per CLAUDE.md §3 rule #9.
 
 rl:
   # ----- Action space -----
@@ -12,13 +22,15 @@ rl:
   # ----- Reference state -----
   reference:
     source: unperturbed_k562          # "unperturbed_k562" (v1) | "external_healthy" (future)
-    epsilon_percentile: 50            # V1 canonical ε from ||z_ctrl - z_ref|| distribution.
-                                      # p50 is intentional for the reported RL run; keep
-                                      # p90 only as named reference provenance.
+    epsilon_percentile: 25            # V2 primary: p25 = 3.166 latent units. The V2 hard
+                                      # benchmark uses ε=p25; p50 (3.531) was the V1 setting.
+                                      # See V2_FINAL_REPORT.md §3 for full hardness-frontier
+                                      # results with this ε.
 
   # ----- Environment dynamics -----
   env:
-    max_steps: 10                     # K — episode budget (ablate {5, 10, 20})
+    max_steps: 3                      # K — V2 primary = 3 (V2 hard benchmark; V1 used 10).
+                                      # Ablate {1, 2, 3, 8} when reporting the hardness frontier.
     start_state: random_perturbation  # "random_perturbation" | "specific" | "uniform_latent"
     start_state_perturbation: null    # only used if start_state == "specific"
     distance_metric: l2               # "l2" | "cosine"
@@ -26,14 +38,14 @@ rl:
     obs_includes_mask: false          # include action mask in observation (sb3 handles it via info)
     n_envs: 4                         # parallel envs (lowered from 16; macOS fork+MPS deadlock risk)
     vec_env: dummy                    # "dummy" (single-process, safe) | "subproc" (multi-process)
-    min_start_distance: auto          # "auto" (=epsilon), "none" (no filter), or a float.
-                                      # CRITICAL: prevents reward-hacking from start states already at goal.
-    epsilon_override: null            # null → read artifacts/vae/epsilon_success.json (V1 p50 canonical).
-                                      # float → override the success threshold for this run only
-                                      # (e.g. compute a p50/p95 with src.models.vae.compute_epsilon_success
-                                      #  once, then pass +rl.env.epsilon_override=<that float>).
-                                      # The override is recorded in per-run metadata.json so
-                                      # provenance is preserved; the canonical JSON is NOT mutated.
+    min_start_distance: 4.0           # V2 primary: 4.0 (curriculum start_d). The curriculum
+                                      # callback (see rl.train.curriculum) later raises this
+                                      # to 10.0 over the first 70 % of training. Set to "auto"
+                                      # (= epsilon) for a fixed-distance run with no curriculum.
+    epsilon_override: 3.1662898064    # V2 primary: ε_p25 = 3.1663 (from the V2 hard bench).
+                                      # null → fall back to artifacts/vae/epsilon_success.json
+                                      # (V1 p50 canonical). The override is recorded in per-run
+                                      # metadata.json; the canonical JSON is NOT mutated.
 
   # ----- Reward -----
   reward:
@@ -43,11 +55,17 @@ rl:
     failure_penalty: 0.0              # optional terminal penalty on truncation
     distance_scale: 1.0               # multiply distance term — tune if rewards are too small
     intermediate_shaping: true        # reward at every step (vs sparse terminal-only)
-    # P0D Track B — reward mode. "absolute_distance" (V1 default), "delta_distance" (per-step
-    # progress: d_prev - d_next), or "terminal_only_step_cost" (R=0 mid-episode; on terminal:
-    # 1·success - beta_step_cost·step_idx).
-    mode: absolute_distance
-    beta_step_cost: 0.05              # used only by terminal_only_step_cost mode
+    # Reward mode (P0D Track B / P0E Phase 3):
+    #   * "absolute_distance" — V1 default; R = -d_next - λ·1[a≠NOOP].
+    #   * "delta_distance" — R = (d_prev - d_next) - λ·1[a≠NOOP]; per-step progress shaping.
+    #   * "terminal_only_step_cost" — V2 PRIMARY; R = 0 mid-episode; R_T = 1·success - β·t at
+    #     terminal/truncation. Decisively outperformed delta and absolute on V2 hard bench
+    #     (B5 + C2 winners both use this mode).
+    #   * "hybrid_delta_terminal" — α·(d_prev - d_next) + B·1[success] at terminal. Sweep at
+    #     α=1, B=10 produced 0.82 training-side success but only 0.17 on hard-bench primary
+    #     cell (generalisation failure; see V2_FINAL_REPORT.md §5.3).
+    mode: terminal_only_step_cost     # V2 primary
+    beta_step_cost: 0.05              # V2 primary: 0.05 (penalty per step at terminal).
     # P0E Phase 3 — hybrid_delta_terminal mode params.
     # R_t = hybrid_alpha · (d_prev - d_next); R_T += hybrid_terminal_bonus · 1[success].
     hybrid_alpha: 1.0
@@ -55,7 +73,9 @@ rl:
 
   # ----- PPO (MaskablePPO from sb3-contrib) -----
   ppo:
-    total_timesteps: 2_000_000
+    total_timesteps: 1_000_000        # V2 primary: 1 M (saturates the K=3 primary cell; B5
+                                      # mean_final_d shrinks 2.87 @ 500k → 2.55 @ 1M). Set
+                                      # 2_000_000 only when reproducing V1 (K=10, p50).
     n_steps: 1024                     # rollout length per env
     batch_size: 256                   # PPO minibatch
     n_epochs: 10                      # PPO inner epochs
@@ -84,11 +104,12 @@ rl:
     smoke_with_untrained_dynamics: false  # if true, init untrained dynamics for pipeline smoke (METRICS MEANINGLESS)
     log_action_distribution_every: 10_000
 
-    # P0D Track B — distance-bin curriculum (off by default; standard fix for slow-learning
-    # sparse rewards). When enabled, min_start_distance is linearly interpolated from
-    # `start_d` (easy) to `end_d` (hard) over the first `end_fraction` of total_timesteps.
+    # P0D Track B — distance-bin curriculum (V2 primary: ENABLED). The curriculum starts
+    # PPO at easy bin 4–6 and progressively moves toward the hard bin 8–10 OOD primary
+    # cell. Without it, B5/C2 collapse to NOOP at step 0 because the terminal-only signal
+    # is too sparse at K=3 / bin 8–10. With it, B5 reaches 1.000 at primary, C2 0.941 ± 0.048.
     curriculum:
-      enabled: false
+      enabled: true                    # V2 primary: enabled
       start_d: 4.0
       end_d: 10.0
       end_fraction: 0.7

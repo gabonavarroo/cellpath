@@ -1,5 +1,27 @@
 # config/default.yaml — master Hydra config.
 #
+# AS OF 2026-05-17, THE DEFAULT COMPOSITION REPRODUCES V2 PRIMARY
+# (see `artifacts_v2/V2_FINAL_REPORT.md`):
+#   * VAE:      `artifacts/vae` (V1, frozen — V2 reuses it).
+#   * Pairs:    `artifacts/pairs` (V1 OT, frozen — V2 reuses it).
+#   * Dynamics: `artifacts_v2/dynamics_v1ot_ror_corr010` (V2 primary, frozen).
+#               Architecture: residual-over-ridge + corr-loss λ=0.10.
+#   * PPO:      `artifacts_v2/rl_v1ot_ror_corr010_terminal_curric_k3_1M` (V2 primary, frozen).
+#               Reward: terminal_only_step_cost; curriculum 4→10; K=3; ε=p25=3.166; 1 M ts.
+#   * Eval:     `artifacts_v2/eval` and `artifacts_v2/figures` (V2 wrap-up outputs).
+#
+# Running `make pipeline` against the defaults LOADS the frozen V2 primary artifacts (no
+# retraining). Running individual training entry points with `+force=true` overwrites the
+# V2 frozen artifacts — discouraged unless you intend to redo V2.
+#
+# To reproduce V1 numbers, override:
+#   python scripts/train_rl.py paths.dynamics_dir=artifacts/dynamics \
+#     paths.rl_dir=artifacts/rl_sweeps/p50_start8_shaped_noopfix_500k \
+#     rl.env.max_steps=10 rl.env.epsilon_override=null \
+#     rl.reward.mode=absolute_distance rl.train.curriculum.enabled=false \
+#     dynamics.use_state_linear_skip=true dynamics.use_residual_over_ridge=false \
+#     dynamics.lambda_corr=0.0
+#
 # Composes path config + per-component configs. Override on the CLI:
 #   python scripts/train_vae.py vae.n_latent=64 seed=7
 # Or compose with an experiment stack:

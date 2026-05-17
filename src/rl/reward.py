@@ -45,6 +45,12 @@ def compute_reward(
     truncated: bool = False,
     is_success: bool = False,
     distance_metric: str = "l2",
+    reward_mode: str = "absolute_distance",
+    prev_distance: float | None = None,
+    beta_step_cost: float = 0.05,
+    step_idx: int = 0,
+    hybrid_alpha: float = 1.0,
+    hybrid_terminal_bonus: float = 1.0,
 ) -> float:
     """Scalar reward for one transition.
 
@@ -73,15 +79,67 @@ def compute_reward(
         True if the terminal state is within ε of ``z_ref``.
     distance_metric
         ``"l2"`` (default) or ``"cosine"``.
+    reward_mode
+        P0D Track B + P0E Phase 3. One of:
+          * ``"absolute_distance"`` (default, V1 behaviour): ``R = -d_next·distance_scale``.
+          * ``"delta_distance"``: ``R = (d_prev - d_next)·distance_scale`` — rewards progress
+            per step. Requires ``prev_distance`` to be provided.
+          * ``"terminal_only_step_cost"``: ``R = 0`` mid-episode; on terminal step,
+            ``R = 1·is_success - beta_step_cost·step_idx``.
+          * ``"hybrid_delta_terminal"``: ``R_t = hybrid_alpha · (d_prev - d_next) · distance_scale``
+            (dense progress shaping like delta_distance, scaled by ``hybrid_alpha``);
+            on terminal step, **additionally** add ``hybrid_terminal_bonus`` if ``is_success``.
+            Combines the per-step gradient of delta_distance with the goal-anchored terminal
+            bonus of terminal_only_step_cost. Requires ``prev_distance``.
+        ``lambda_sparse``, ``lambda_unc``, ``success_bonus``, ``failure_penalty`` are
+        still applied additively as in the absolute_distance mode (they shape, not
+        replace, the chosen base reward). The exception is ``terminal_only_step_cost``,
+        which already encodes the success signal — passing ``success_bonus > 0`` would
+        double-count.
+    prev_distance
+        Distance from the *pre-step* state to z_ref. Required for ``reward_mode="delta_distance"``.
+        For NO-OP and ``absolute_distance``/``terminal_only_step_cost`` modes it is ignored.
+    beta_step_cost
+        Per-step cost in the ``terminal_only_step_cost`` mode. Default 0.05.
+    step_idx
+        Current step index (0-based), used by ``terminal_only_step_cost``.
 
     Returns
     -------
     float
         Scalar reward for this transition.
     """
-    # --- 1. Dense distance shaping (always applied) -----------------------
-    d = distance_to_reference(z_next, z_ref, metric=distance_metric)
-    reward = -float(distance_scale) * d
+    d_next = distance_to_reference(z_next, z_ref, metric=distance_metric)
+
+    # --- 1. Base reward by mode -------------------------------------------
+    if reward_mode == "absolute_distance":
+        reward = -float(distance_scale) * d_next
+    elif reward_mode == "delta_distance":
+        if prev_distance is None:
+            raise ValueError(
+                "reward_mode='delta_distance' requires prev_distance to be provided. "
+                "Pass distance_to_reference(z_pre, z_ref) from the environment."
+            )
+        reward = float(distance_scale) * (float(prev_distance) - d_next)
+    elif reward_mode == "terminal_only_step_cost":
+        if terminated or truncated:
+            reward = float(distance_scale) * (1.0 if is_success else 0.0)
+            reward -= float(beta_step_cost) * float(step_idx)
+        else:
+            reward = 0.0
+    elif reward_mode == "hybrid_delta_terminal":
+        if prev_distance is None:
+            raise ValueError(
+                "reward_mode='hybrid_delta_terminal' requires prev_distance to be provided."
+            )
+        reward = float(hybrid_alpha) * float(distance_scale) * (float(prev_distance) - d_next)
+        if (terminated or truncated) and is_success:
+            reward += float(hybrid_terminal_bonus)
+    else:
+        raise ValueError(
+            f"Unknown reward_mode {reward_mode!r}. Choose from "
+            "{'absolute_distance', 'delta_distance', 'terminal_only_step_cost'}."
+        )
 
     # --- 2. Sparsity penalty (gene actions only, D7) ----------------------
     if action != noop_idx:

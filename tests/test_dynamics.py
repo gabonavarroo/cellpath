@@ -464,3 +464,225 @@ class TestEpochMetrics:
         assert recovered["epoch"] == record["epoch"]
         assert recovered["all_margins_pass"] is False
         assert abs(recovered["val_mlp_pearson"] - record["val_mlp_pearson"]) < 1e-9
+
+
+class TestCorrelationLoss:
+    """Tests for src.analysis.metrics.correlation_loss."""
+
+    def test_perfect_correlation_gives_zero(self) -> None:
+        """When pred == target, every per-dim corr is 1.0, so loss should be ~0."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        torch.manual_seed(0)
+        B, D   = 32, 16
+        target = torch.randn(B, D)
+        loss   = correlation_loss(target, target)
+        assert loss.item() < 1e-4, f"perfect correlation loss should be ~0, got {loss.item()}"
+
+    def test_anti_correlation_gives_near_two(self) -> None:
+        """When pred == -target (anti-correlated), each per-dim corr is -1.0, loss ≈ 2."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        torch.manual_seed(1)
+        B, D   = 64, 8
+        target = torch.randn(B, D)
+        loss   = correlation_loss(-target, target)
+        assert loss.item() > 1.9, f"anti-correlation loss should be ≈2, got {loss.item()}"
+
+    def test_zero_variance_dim_excluded(self) -> None:
+        """A dimension with constant target must be excluded (no NaN/Inf)."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        B, D   = 16, 4
+        target = torch.randn(B, D)
+        target[:, 2] = 5.0       # constant column → zero variance → should be excluded
+        pred   = torch.randn(B, D)
+        loss   = correlation_loss(pred, target)
+        assert torch.isfinite(loss), f"loss must be finite even with zero-var dim, got {loss.item()}"
+
+    def test_output_is_finite_scalar(self) -> None:
+        """Random inputs should always produce a finite scalar."""
+        torch = _torch_or_skip()
+        from src.analysis.metrics import correlation_loss
+
+        torch.manual_seed(42)
+        B, D   = 128, 32
+        pred   = torch.randn(B, D)
+        target = torch.randn(B, D)
+        loss   = correlation_loss(pred, target)
+        assert loss.ndim == 0, "output must be a scalar (0-dim tensor)"
+        assert torch.isfinite(loss), f"loss must be finite for random inputs, got {loss.item()}"
+
+
+class TestResidualOverRidge:
+    """P0D Track A — residual-over-ridge architecture.
+
+    Verifies (a) mutual-exclusion with `use_state_linear_skip`, (b) forward-pass shapes,
+    (c) buffer registration + zero-init of head_mu, (d) ``fit_ridge_baseline_from_pairs``
+    splits ridge coefficients correctly so the model's output matches the ridge baseline
+    when the MLP residual is zero, and (e) state_dict round-trip preserves buffer values.
+    """
+
+    def test_mutual_exclusion_with_state_linear_skip(self) -> None:
+        _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            PerturbationDynamicsModel(
+                n_latent=32, n_genes=10,
+                use_state_linear_skip=True,
+                use_residual_over_ridge=True,
+            )
+
+    def test_forward_shapes_with_ror(self) -> None:
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(0)
+        model = PerturbationDynamicsModel(
+            n_latent=32, n_genes=10,
+            use_state_linear_skip=False,
+            use_residual_over_ridge=True,
+        )
+        z = torch.randn(8, 32)
+        g = torch.randint(1, 11, (8,))
+        z_next, mu, log_var = model(z, g)
+        assert z_next.shape == (8, 32)
+        assert mu.shape == (8, 32)
+        assert log_var.shape == (8, 32)
+        assert torch.allclose(z_next, z + mu, atol=1e-5)
+        # Buffers exist with correct shape.
+        assert model.ridge_W_z.shape == (32, 32)
+        assert model.ridge_W_gene.shape == (11, 32)
+        assert model.ridge_b.shape == (32,)
+        # No state_linear / gene_delta when only RoR is set.
+        assert model.state_linear is None
+        assert model.gene_delta is None
+        assert model.use_residual_over_ridge is True
+
+    def test_head_mu_is_zero_initialised(self) -> None:
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(0)
+        model = PerturbationDynamicsModel(
+            n_latent=32, n_genes=10,
+            use_residual_over_ridge=True,
+        )
+        assert torch.all(model.head_mu.weight == 0.0)
+        assert torch.all(model.head_mu.bias == 0.0)
+
+    def test_ror_with_zero_buffers_matches_legacy_when_mlp_zero(self) -> None:
+        """With buffers = 0 and head_mu = 0 at init, μ comes only from the trunk;
+        but head_mu is also zeroed, so μ = 0 at init regardless of input."""
+        torch = _torch_or_skip()
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(0)
+        model = PerturbationDynamicsModel(
+            n_latent=32, n_genes=10,
+            use_residual_over_ridge=True,
+        )
+        model.eval()
+        z = torch.randn(4, 32)
+        g = torch.randint(1, 11, (4,))
+        with torch.no_grad():
+            _, mu, _ = model(z, g)
+        assert torch.allclose(mu, torch.zeros_like(mu), atol=1e-6)
+
+    def test_fit_ridge_baseline_from_pairs_buffer_shapes(self) -> None:
+        torch = _torch_or_skip()
+        import numpy as np
+        from src.models.dynamics import fit_ridge_baseline_from_pairs
+        rng = np.random.default_rng(0)
+        n_latent, n_genes, M = 16, 8, 200
+        z = rng.standard_normal((M, n_latent)).astype(np.float32)
+        g = rng.integers(1, n_genes + 1, M).astype(np.int64)
+        delta = rng.standard_normal((M, n_latent)).astype(np.float32)
+        W_z, W_gene, b = fit_ridge_baseline_from_pairs(z, g, delta, n_genes)
+        assert W_z.shape == (n_latent, n_latent)
+        assert W_gene.shape == (n_genes + 1, n_latent)
+        assert b.shape == (n_latent,)
+        # Row 0 of W_gene is always zeros (ctrl-placeholder convention).
+        assert np.allclose(W_gene[0], 0.0)
+
+    def test_fit_ridge_baseline_from_pairs_matches_ridge_predict(self) -> None:
+        """Splitting must preserve predictions: z @ W_z + W_gene[g] + b == ridge.predict(X)."""
+        torch = _torch_or_skip()
+        import numpy as np
+        from src.analysis.metrics import _fit_ridge_baseline, _one_hot_genes
+        from src.models.dynamics import fit_ridge_baseline_from_pairs
+        rng = np.random.default_rng(7)
+        n_latent, n_genes, M = 16, 8, 200
+        z = rng.standard_normal((M, n_latent)).astype(np.float32)
+        g = rng.integers(1, n_genes + 1, M).astype(np.int64)
+        # delta ≈ a per-gene linear function of z, plus noise (so ridge has signal)
+        delta = (z @ rng.standard_normal((n_latent, n_latent)).astype(np.float32) * 0.05
+                 + 0.1 * rng.standard_normal((M, n_latent)).astype(np.float32))
+        ridge = _fit_ridge_baseline(z, g, delta, n_genes)
+        X = np.concatenate([z, _one_hot_genes(g, n_genes)], axis=1)
+        ridge_pred_sklearn = ridge.predict(X).astype(np.float32)
+        W_z, W_gene, b = fit_ridge_baseline_from_pairs(z, g, delta, n_genes)
+        # Embedding-style lookup mimics one_hot @ W_gene.T (rows 1..n_genes only).
+        ridge_pred_split = (z @ W_z + W_gene[g] + b).astype(np.float32)
+        assert np.allclose(ridge_pred_split, ridge_pred_sklearn, atol=1e-4), \
+            f"max abs diff: {np.max(np.abs(ridge_pred_split - ridge_pred_sklearn))}"
+
+    def test_ror_forward_matches_ridge_at_init_after_fit(self) -> None:
+        """After fitting and assigning ridge buffers (head_mu still zero), the model
+        forward pass must produce μ == ridge prediction."""
+        torch = _torch_or_skip()
+        import numpy as np
+        from src.models.dynamics import PerturbationDynamicsModel, fit_ridge_baseline_from_pairs
+        rng = np.random.default_rng(13)
+        n_latent, n_genes, M = 16, 8, 200
+        z_np = rng.standard_normal((M, n_latent)).astype(np.float32)
+        g_np = rng.integers(1, n_genes + 1, M).astype(np.int64)
+        delta_np = (z_np @ rng.standard_normal((n_latent, n_latent)).astype(np.float32) * 0.05
+                    + 0.1 * rng.standard_normal((M, n_latent)).astype(np.float32))
+        W_z, W_gene, b = fit_ridge_baseline_from_pairs(z_np, g_np, delta_np, n_genes)
+        torch.manual_seed(0)
+        model = PerturbationDynamicsModel(
+            n_latent=n_latent, n_genes=n_genes,
+            use_residual_over_ridge=True,
+        )
+        model.eval()
+        with torch.no_grad():
+            model.ridge_W_z.copy_(torch.from_numpy(W_z))
+            model.ridge_W_gene.copy_(torch.from_numpy(W_gene))
+            model.ridge_b.copy_(torch.from_numpy(b))
+            # Sample a fresh batch for the forward pass:
+            z_batch = torch.from_numpy(z_np[:32])
+            g_batch = torch.from_numpy(g_np[:32])
+            _, mu, _ = model(z_batch, g_batch)
+        ridge_pred = z_np[:32] @ W_z + W_gene[g_np[:32]] + b
+        assert torch.allclose(mu, torch.from_numpy(ridge_pred), atol=1e-5), \
+            "After fit-and-assign with head_mu=0, μ must equal the ridge prediction."
+
+    def test_ror_state_dict_round_trip_preserves_buffers(self, tmp_path) -> None:
+        torch = _torch_or_skip()
+        import numpy as np
+        from src.models.dynamics import PerturbationDynamicsModel
+        torch.manual_seed(0)
+        m1 = PerturbationDynamicsModel(
+            n_latent=16, n_genes=8,
+            use_residual_over_ridge=True,
+        )
+        rng = np.random.default_rng(0)
+        W_z = rng.standard_normal((16, 16)).astype(np.float32)
+        W_gene = rng.standard_normal((9, 16)).astype(np.float32)
+        b = rng.standard_normal((16,)).astype(np.float32)
+        W_gene[0] = 0.0
+        with torch.no_grad():
+            m1.ridge_W_z.copy_(torch.from_numpy(W_z))
+            m1.ridge_W_gene.copy_(torch.from_numpy(W_gene))
+            m1.ridge_b.copy_(torch.from_numpy(b))
+        ckpt = tmp_path / "m.pt"
+        torch.save(m1.state_dict(), ckpt)
+        m2 = PerturbationDynamicsModel(
+            n_latent=16, n_genes=8,
+            use_residual_over_ridge=True,
+        )
+        m2.load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True))
+        assert torch.allclose(m1.ridge_W_z, m2.ridge_W_z)
+        assert torch.allclose(m1.ridge_W_gene, m2.ridge_W_gene)
+        assert torch.allclose(m1.ridge_b, m2.ridge_b)

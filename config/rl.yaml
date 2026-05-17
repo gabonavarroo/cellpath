@@ -43,6 +43,15 @@ rl:
     failure_penalty: 0.0              # optional terminal penalty on truncation
     distance_scale: 1.0               # multiply distance term — tune if rewards are too small
     intermediate_shaping: true        # reward at every step (vs sparse terminal-only)
+    # P0D Track B — reward mode. "absolute_distance" (V1 default), "delta_distance" (per-step
+    # progress: d_prev - d_next), or "terminal_only_step_cost" (R=0 mid-episode; on terminal:
+    # 1·success - beta_step_cost·step_idx).
+    mode: absolute_distance
+    beta_step_cost: 0.05              # used only by terminal_only_step_cost mode
+    # P0E Phase 3 — hybrid_delta_terminal mode params.
+    # R_t = hybrid_alpha · (d_prev - d_next); R_T += hybrid_terminal_bonus · 1[success].
+    hybrid_alpha: 1.0
+    hybrid_terminal_bonus: 1.0
 
   # ----- PPO (MaskablePPO from sb3-contrib) -----
   ppo:
@@ -74,6 +83,17 @@ rl:
                                       # Revert to false once train_dynamics.py wires dynamics_validation_gate().
     smoke_with_untrained_dynamics: false  # if true, init untrained dynamics for pipeline smoke (METRICS MEANINGLESS)
     log_action_distribution_every: 10_000
+
+    # P0D Track B — distance-bin curriculum (off by default; standard fix for slow-learning
+    # sparse rewards). When enabled, min_start_distance is linearly interpolated from
+    # `start_d` (easy) to `end_d` (hard) over the first `end_fraction` of total_timesteps.
+    curriculum:
+      enabled: false
+      start_d: 4.0
+      end_d: 10.0
+      end_fraction: 0.7
+      apply_threshold: 0.25            # min Δd before pool is re-filtered
+      check_every: 10_000
 
   # ----- Evaluation -----
   eval:

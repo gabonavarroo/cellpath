@@ -61,6 +61,7 @@ def load_dynamics_model(dynamics_dir: str | Path) -> Any:
         ("log_var_init_bias", -2.0),
         ("use_state_linear_skip", False),
         ("use_gene_delta_bias", False),
+        ("use_residual_over_ridge", False),
     ]:
         if key in accepted:
             kwargs[key] = cfg.get(key, default)

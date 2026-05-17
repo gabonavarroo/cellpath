@@ -213,3 +213,164 @@ class TestComputeReward:
         expected_cos = -distance_to_reference(z, z_ref, metric="cosine")
         assert r_l2  == pytest.approx(expected_l2,  rel=1e-5)
         assert r_cos == pytest.approx(expected_cos, rel=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# TestComputeRewardModes (P0D Track B)
+# ---------------------------------------------------------------------------
+
+
+class TestComputeRewardModes:
+    """P0D Track B — reward_mode ∈ {absolute_distance, delta_distance, terminal_only_step_cost}.
+
+    The default ``absolute_distance`` mode must be bit-for-bit equivalent to the legacy
+    behaviour (verified by ``TestComputeReward`` above remaining green). These tests verify
+    the two new modes plus error paths.
+    """
+
+    def test_absolute_distance_mode_matches_legacy(self) -> None:
+        """Setting reward_mode='absolute_distance' explicitly must not change behaviour."""
+        from src.rl.reward import compute_reward
+        z_next = np.array([3.0, 4.0] + [0.0] * 30, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        r_legacy = compute_reward(z_next, z_ref, action=10, noop_idx=10)
+        r_new    = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                  reward_mode="absolute_distance")
+        assert r_legacy == pytest.approx(r_new, abs=1e-9)
+
+    def test_delta_distance_rewards_progress(self) -> None:
+        from src.rl.reward import compute_reward
+        z_next = np.array([1.0] + [0.0] * 31, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        # d_prev = 5.0, d_next = 1.0 → reward = (5.0 - 1.0) = 4.0 (no sparsity bc NO-OP).
+        r = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                           reward_mode="delta_distance", prev_distance=5.0,
+                           distance_scale=1.0, lambda_sparse=0.0)
+        assert r == pytest.approx(4.0, abs=1e-6)
+
+    def test_delta_distance_negative_when_worse(self) -> None:
+        from src.rl.reward import compute_reward
+        z_next = np.array([5.0] + [0.0] * 31, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        # d_prev = 1.0, d_next = 5.0 → reward = (1.0 - 5.0) = -4.0 (no sparsity bc NO-OP).
+        r = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                           reward_mode="delta_distance", prev_distance=1.0,
+                           lambda_sparse=0.0)
+        assert r == pytest.approx(-4.0, abs=1e-6)
+
+    def test_delta_distance_requires_prev_distance(self) -> None:
+        from src.rl.reward import compute_reward
+        z_next = np.zeros(32, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        with pytest.raises(ValueError, match="prev_distance"):
+            compute_reward(z_next, z_ref, action=0, noop_idx=10,
+                           reward_mode="delta_distance", prev_distance=None)
+
+    def test_terminal_only_zero_mid_episode(self) -> None:
+        from src.rl.reward import compute_reward
+        z_next = np.array([7.0] + [0.0] * 31, dtype=np.float32)  # large distance
+        z_ref  = np.zeros(32, dtype=np.float32)
+        r = compute_reward(z_next, z_ref, action=3, noop_idx=10,
+                           reward_mode="terminal_only_step_cost",
+                           terminated=False, truncated=False,
+                           is_success=False, lambda_sparse=0.0, step_idx=2)
+        # Mid-episode: 0 base reward; sparsity is 0 since lambda_sparse=0.
+        assert r == pytest.approx(0.0, abs=1e-6)
+
+    def test_terminal_only_success_at_terminal(self) -> None:
+        from src.rl.reward import compute_reward
+        z_next = np.zeros(32, dtype=np.float32)  # at goal
+        z_ref  = np.zeros(32, dtype=np.float32)
+        # Terminal step at step_idx=2 with β=0.05 → R = 1·1 - 0.05·2 = 0.9.
+        r = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                           reward_mode="terminal_only_step_cost",
+                           terminated=True, is_success=True,
+                           beta_step_cost=0.05, step_idx=2,
+                           lambda_sparse=0.0)
+        assert r == pytest.approx(0.9, abs=1e-6)
+
+    def test_terminal_only_truncation_no_success(self) -> None:
+        from src.rl.reward import compute_reward
+        z_next = np.array([7.0] + [0.0] * 31, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        # Truncated at step 3, no success → R = 0 - 0.05·3 = -0.15.
+        r = compute_reward(z_next, z_ref, action=3, noop_idx=10,
+                           reward_mode="terminal_only_step_cost",
+                           terminated=False, truncated=True,
+                           is_success=False, beta_step_cost=0.05, step_idx=3,
+                           lambda_sparse=0.0)
+        assert r == pytest.approx(-0.15, abs=1e-6)
+
+    def test_unknown_reward_mode_raises(self) -> None:
+        from src.rl.reward import compute_reward
+        with pytest.raises(ValueError, match="Unknown reward_mode"):
+            compute_reward(_zeros(), _zeros(), action=0, noop_idx=10,
+                           reward_mode="quadratic")
+
+
+class TestHybridDeltaTerminalReward:
+    """P0E Phase 3 — hybrid_delta_terminal reward mode."""
+
+    def test_hybrid_zero_terminal_matches_delta_distance(self) -> None:
+        """With hybrid_terminal_bonus=0, mid-episode reward equals delta_distance mode."""
+        from src.rl.reward import compute_reward
+        z_next = np.array([1.0] + [0.0] * 31, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        r_delta = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                 reward_mode="delta_distance", prev_distance=5.0,
+                                 lambda_sparse=0.0)
+        r_hybrid = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                  reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                                  hybrid_alpha=1.0, hybrid_terminal_bonus=0.0,
+                                  lambda_sparse=0.0)
+        assert r_hybrid == pytest.approx(r_delta, abs=1e-6)
+
+    def test_hybrid_requires_prev_distance(self) -> None:
+        from src.rl.reward import compute_reward
+        with pytest.raises(ValueError, match="prev_distance"):
+            compute_reward(_zeros(), _zeros(), action=0, noop_idx=10,
+                           reward_mode="hybrid_delta_terminal", prev_distance=None)
+
+    def test_hybrid_terminal_bonus_only_on_success(self) -> None:
+        """The terminal bonus is added only when is_success is True at terminal/truncation."""
+        from src.rl.reward import compute_reward
+        z_next = np.zeros(32, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        # δd = 5 - 0 = 5; bonus added on success.
+        r_success = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                   reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                                   hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                                   terminated=True, is_success=True,
+                                   lambda_sparse=0.0)
+        r_fail = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                                reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                                hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                                terminated=True, is_success=False,
+                                lambda_sparse=0.0)
+        r_mid = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                               reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                               hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                               terminated=False, is_success=False,
+                               lambda_sparse=0.0)
+        # All three have the same δd-shaping (5.0). Bonus differs.
+        assert r_success == pytest.approx(5.0 + 2.0, abs=1e-6)
+        assert r_fail    == pytest.approx(5.0, abs=1e-6)
+        assert r_mid     == pytest.approx(5.0, abs=1e-6)
+
+    def test_hybrid_alpha_scales_shaping_only(self) -> None:
+        """Doubling alpha doubles the shaping term but leaves the terminal bonus alone."""
+        from src.rl.reward import compute_reward
+        z_next = np.zeros(32, dtype=np.float32)
+        z_ref  = np.zeros(32, dtype=np.float32)
+        r1 = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                            reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                            hybrid_alpha=1.0, hybrid_terminal_bonus=2.0,
+                            terminated=True, is_success=True,
+                            lambda_sparse=0.0)
+        r2 = compute_reward(z_next, z_ref, action=10, noop_idx=10,
+                            reward_mode="hybrid_delta_terminal", prev_distance=5.0,
+                            hybrid_alpha=2.0, hybrid_terminal_bonus=2.0,
+                            terminated=True, is_success=True,
+                            lambda_sparse=0.0)
+        # r1 = α·5 + 2 = 7; r2 = 2·5 + 2 = 12 → diff = α·5 = 5
+        assert r2 - r1 == pytest.approx(5.0, abs=1e-6)

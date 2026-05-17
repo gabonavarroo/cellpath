@@ -327,6 +327,34 @@ the RL env, trains MaskablePPO, produces rollouts.
 
 ---
 
+## V2 phases (post-original-plan)
+
+V2 ran 6 phases after the original 14-day plan above. All complete as of 2026-05-16:
+
+| Phase | Goal | Key output | Status |
+|---|---|---|---|
+| P0A | Forensic V1 benchmark | `artifacts_v2/p0a_summary.md`, hard-bench eval, pairing-noise diagnostic | DONE |
+| P0B′ | Pairing correction (mean_delta, random) | `pairs_{mean_delta,random}`, dynamics retrains | DONE |
+| P0B″ | Soft-OT barycentric pairing | `dynamics_soft_ot_default` (passes gate, control-hostile) | DONE |
+| P0B2 | Mean-delta + correlation loss | `dynamics_mean_delta_corr_{005,010,030}` (all fail gate) | DONE |
+| P0C0 | Reachability diagnostic | `reachability_probe/probe_results.json` | DONE |
+| P0D | V1 OT hardening (RoR + reward modes + curriculum) | RoR architecture, terminal_only_step_cost, B5 winner | DONE |
+| P0E | Combinatorial hardening (Track C + multi-step greedy) | greedy_dyn_2 baseline, C2 PPO on RoR | DONE |
+| P0F | V2 honest wrap-up (seed sweep + hardness frontier + report) | `V2_FINAL_REPORT.md`, 4-seed CIs, 6 figures | DONE |
+
+**V2 primary recommendation:** `artifacts_v2/dynamics_v1ot_ror_corr010` × C2 PPO. Full report
+at [`artifacts_v2/V2_FINAL_REPORT.md`](artifacts_v2/V2_FINAL_REPORT.md).
+
+## V3 — Latent / dynamics redesign (scoped, not started)
+
+Scoped in [`V3_RESEARCH_PLAN.md`](V3_RESEARCH_PLAN.md). Central hypothesis: a higher-dim or
+semi-supervised latent (64D NB, 64D ZINB, SCANVI 32D) produces a dynamics field where
+multi-step planning is genuinely required, and PPO − greedy_dyn_2 ≥ +0.05 pp at one
+reachable cell. **VAE retraining is permitted in V3** (the V2-only "no VAE retrain" rule is
+lifted in `artifacts_v3/`).
+
+---
+
 ## Cross-phase invariants
 
 - **PROGRESS.md is updated at the end of every work session.** Phase work without progress

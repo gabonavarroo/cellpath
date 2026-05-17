@@ -119,19 +119,41 @@ See `DATA.md` for the full preprocessing pipeline and the cross-sectional honest
 
 ## Results
 
-> Placeholder — populated by `scripts/evaluate.py` after a full pipeline run.
+> **V2 headline (2026-05-16).** Full V2 wrap-up in
+> [`artifacts_v2/V2_FINAL_REPORT.md`](artifacts_v2/V2_FINAL_REPORT.md). V3 scoping in
+> [`V3_RESEARCH_PLAN.md`](V3_RESEARCH_PLAN.md).
 
-| Metric | Component | Target | Current |
+V2 primary configuration: **`RoR_corr010 dynamics × C2 PPO`** (residual-over-ridge dynamics
+trained on V1 OT pairs with correlation-loss λ=0.10; PPO trained with terminal-only step-cost
+reward + distance-bin curriculum over 1 M timesteps).
+
+| Cell (V2 hard benchmark) | PPO (4-seed mean ± std) | 95 % CI | random | greedy_dyn_2 | PPO−grd2 |
+|---|---:|---|---:|---:|---:|
+| **K=3 bin 8-10 OOD (primary)** | **0.941 ± 0.048** | [0.894, 0.988] | 0.170 | 1.000 | −0.059 |
+| K=3 bin 6-8 OOD | 0.998 ± 0.002 | [0.996, 0.999] | 0.177 | 1.000 | −0.002 |
+| K=2 bin 6-8 OOD (frontier) | 0.748 ± 0.053 | [0.697, 0.800] | 0.070 | 0.790 | −0.042 |
+| K=2 bin 8-10 OOD | 0.283 ± 0.045 | [0.239, 0.328] | 0.020 | 0.300 | −0.017 |
+
+**PPO − random = +77 pp at primary cell.** Mean steps per success ≈ 2.5–2.7 (random uses ~5.5).
+
+**Honest framing:** PPO matches but does not exceed greedy_dyn_2 anywhere on this benchmark
+under 32D latent geometry. The V2 result is *"PPO has compressed a 2-step lookahead into a
+feedforward controller without runtime model access"*, not *"PPO discovers a superior
+strategy"*. See V2_FINAL_REPORT.md §6 for the claims V2 explicitly avoids.
+
+**Dynamics gate (Phase 2 supervised metric):**
+
+| Dynamics | val margin ≥ +0.030 | beam k=3 reachability | PPO at primary |
 |---|---|---|---|
-| ELBO converged | VAE | — | — |
-| Silhouette on perturbation | VAE latent | ≥ 0.05 | — |
-| Primary validation gate | Dynamics | passed | — |
-| Held-out cell R² | Dynamics | > per-gene-mean-Δ | — |
-| Uncertainty calibration (Spearman) | Dynamics | ≥ 0.20 | — |
-| OOD held-out gene R² | Dynamics | reported | — |
-| Final success rate | RL | ≥ 30% on in-distribution | — |
-| Mean interventions per success | RL | ≤ 5 (stretch) | — |
-| At least one DepMap q < 0.05 | DepMap | yes | — |
+| V1 OT | FAIL (+0.0074) | PASS (17/17) | PASS (0.963 ± 0.042) |
+| RoR_corr010 (V2 primary) | FAIL (+0.0136) | PASS (17/17) | PASS (0.941 ± 0.048) |
+| soft_ot | **PASS (+0.0413)** | **FAIL (0/17)** | FAIL (0.000) |
+| mean_delta_corr_030 | FAIL (+0.0232) | FAIL (0/17) | FAIL (0.000) |
+
+The supervised gate is **necessary but not sufficient** for RL controllability (soft-OT
+passes the gate but is control-hostile; V1 OT and RoR fail the gate but are fully
+controllable). This is V2's main methodological contribution. See
+`artifacts_v2/figures/dynamics_taxonomy.png`.
 
 ---
 

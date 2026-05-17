@@ -431,7 +431,30 @@ def train_ppo(cfg: Any) -> Any:
         deterministic=False,
         render=False,
     )
-    callbacks = CallbackList([eval_cb])
+
+    # P0D Track B — distance-bin curriculum (opt-in via cfg.rl.train.curriculum.enabled).
+    callback_list: list[Any] = [eval_cb]
+    curriculum_cfg = cfg.rl.train.get("curriculum", None)
+    if curriculum_cfg is not None and bool(curriculum_cfg.get("enabled", False)):
+        from src.rl.curriculum import DistanceCurriculumCallback
+        log.info(
+            "Distance curriculum ENABLED: start_d=%.2f → end_d=%.2f over first %.0f%% of training",
+            float(curriculum_cfg.start_d), float(curriculum_cfg.end_d),
+            100.0 * float(curriculum_cfg.end_fraction),
+        )
+        curr_cb = DistanceCurriculumCallback(
+            vae_latents_h5ad = cfg.paths.vae_latents_h5ad,
+            z_ref_path       = cfg.paths.vae_z_reference_centroid,
+            start_d          = float(curriculum_cfg.start_d),
+            end_d            = float(curriculum_cfg.end_d),
+            total_timesteps  = int(cfg.rl.ppo.total_timesteps),
+            end_fraction     = float(curriculum_cfg.get("end_fraction", 0.7)),
+            apply_threshold  = float(curriculum_cfg.get("apply_threshold", 0.25)),
+            check_every      = int(curriculum_cfg.get("check_every", 10_000)),
+            verbose          = 1,
+        )
+        callback_list.append(curr_cb)
+    callbacks = CallbackList(callback_list)
 
     # ------------------------------------------------------------------ #
     # 5. Train

@@ -220,6 +220,10 @@ class GreedyDynamicsBeamPolicy:
         noop_idx: int,
         depth: int = 2,
         beam_width: int = 20,
+        safety_tox_per_action: np.ndarray | None = None,
+        safety_essential_per_action: np.ndarray | None = None,
+        lambda_tox: float = 0.0,
+        lambda_ce: float = 0.0,
     ) -> None:
         if depth < 1:
             raise ValueError(f"depth must be ≥ 1, got {depth}")
@@ -231,7 +235,37 @@ class GreedyDynamicsBeamPolicy:
         self.noop_idx    = int(noop_idx)
         self.depth       = int(depth)
         self.beam_width  = int(beam_width)
-        self.name = f"greedy_dyn_{self.depth}"
+        # V3B Phase 2: safety-aware scoring. When λ_tox = λ_ce = 0, behavior is byte-identical
+        # to V2's distance-only greedy. When non-zero, the plan score becomes
+        # ``dist(z_next, z_ref) + λ_tox · cumulative_tox + λ_ce · cumulative_essential``.
+        # Required so greedy_dyn_2_under_reward_C is a fair comparator for PPO_C
+        # (V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md §5).
+        self.safety_tox_per_action = (
+            np.asarray(safety_tox_per_action, dtype=np.float32)
+            if safety_tox_per_action is not None else None
+        )
+        self.safety_essential_per_action = (
+            np.asarray(safety_essential_per_action, dtype=bool)
+            if safety_essential_per_action is not None else None
+        )
+        if self.safety_tox_per_action is not None and self.safety_tox_per_action.shape != (self.n_genes,):
+            raise ValueError(
+                f"safety_tox_per_action shape mismatch: expected ({self.n_genes},), "
+                f"got {self.safety_tox_per_action.shape}"
+            )
+        if self.safety_essential_per_action is not None and self.safety_essential_per_action.shape != (self.n_genes,):
+            raise ValueError(
+                f"safety_essential_per_action shape mismatch: expected ({self.n_genes},), "
+                f"got {self.safety_essential_per_action.shape}"
+            )
+        self.lambda_tox = float(lambda_tox)
+        self.lambda_ce = float(lambda_ce)
+        self._safety_active = (
+            self.safety_tox_per_action is not None
+            and (self.lambda_tox > 0.0 or self.lambda_ce > 0.0)
+        )
+        suffix = "_safety" if self._safety_active else ""
+        self.name = f"greedy_dyn_{self.depth}{suffix}"
 
     def _expand(self, z_batch: np.ndarray, gene_actions: np.ndarray) -> np.ndarray:
         """One batched dynamics call expanding (B, n_latent) by all genes in (B,)."""
@@ -246,6 +280,16 @@ class GreedyDynamicsBeamPolicy:
             return z_next.detach().cpu().numpy().astype(np.float32)
         return np.asarray(z_next, dtype=np.float32)
 
+    def _action_safety_cost(self, gene_action_idx: int) -> tuple[float, int]:
+        """Per-action safety contributions: ``(tox_raw(g), is_essential(g))``."""
+        tox = 0.0
+        ce = 0
+        if self.safety_tox_per_action is not None and 0 <= gene_action_idx < self.n_genes:
+            tox = float(self.safety_tox_per_action[gene_action_idx])
+        if self.safety_essential_per_action is not None and 0 <= gene_action_idx < self.n_genes:
+            ce = int(bool(self.safety_essential_per_action[gene_action_idx]))
+        return tox, ce
+
     def select_action(self, z: np.ndarray, mask: np.ndarray, info: dict[str, Any]) -> int:
         z = np.asarray(z, dtype=np.float32)
         valid = _valid_actions(mask)
@@ -258,62 +302,73 @@ class GreedyDynamicsBeamPolicy:
         )
         noop_available = self.noop_idx in valid
 
-        # Best plan tracking: (final_distance, first_action). Includes the noop branch.
+        # Episode-cumulative safety so far (set by env when reward_mode=safety_aware).
+        # When greedy is queried mid-episode (after some gene actions), info["tox_path"]
+        # and info["common_essential_count"] reflect those prior actions. Greedy plans
+        # ADDITIONS on top of that baseline. Default to 0 when env did not provide them.
+        path_tox0 = float(info.get("tox_path", 0.0)) if self._safety_active else 0.0
+        path_ce0 = int(info.get("common_essential_count", 0)) if self._safety_active else 0
+
+        def _score(dist: float, plan_tox: float, plan_ce: int) -> float:
+            return dist + self.lambda_tox * plan_tox + self.lambda_ce * plan_ce
+
+        # Best plan tracking: (best_score, first_action). NOOP branch = "stay here".
         best_first_action: int = self.noop_idx
-        best_distance: float = float("inf")
+        best_score: float = float("inf")
         if noop_available:
-            best_distance = float(np.linalg.norm(z - self.z_ref))
+            d_here = float(np.linalg.norm(z - self.z_ref))
+            best_score = _score(d_here, path_tox0, path_ce0)
             best_first_action = self.noop_idx
 
         if len(env_avail_genes) == 0:
             return best_first_action
 
-        # Beam entries: (z_current, first_action_taken, used_set, depth_so_far, distance).
-        # Initial beam = singleton (z, first=None, used=∅, d=0, dist=∞)
-        beam: list[tuple[np.ndarray, int | None, frozenset[int], float]] = [
-            (z, None, frozenset(), float("inf"))
+        # Beam entries: (z_current, first_action_taken, used_set, plan_tox_added, plan_ce_added).
+        beam: list[tuple[np.ndarray, int | None, frozenset[int], float, int]] = [
+            (z, None, frozenset(), 0.0, 0)
         ]
 
         for _step in range(self.depth):
-            # Build the candidate batch from the current beam: for each beam entry, expand by
-            # every still-available gene (env mask ∩ not-yet-used-in-plan).
-            new_candidates: list[tuple[np.ndarray, int | None, frozenset[int], float]] = []
+            new_candidates: list[tuple[np.ndarray, int | None, frozenset[int], float, int]] = []
             batch_z: list[np.ndarray] = []
             batch_gene: list[int] = []
-            batch_meta: list[tuple[int | None, frozenset[int], int]] = []
-            for z_cur, first_action, used, _ in beam:
-                # Remaining genes = env_avail_genes minus what this plan has used so far.
-                # (The env's mask already excludes prior-step env-side uses; intra-plan repeats
-                # are caught by `used`.)
+            batch_meta: list[tuple[int | None, frozenset[int], int, float, int]] = []
+            for z_cur, first_action, used, plan_tox, plan_ce in beam:
                 remaining = [int(g) for g in env_avail_genes if int(g) not in used]
                 for g in remaining:
                     batch_z.append(z_cur)
                     batch_gene.append(g)
-                    batch_meta.append((first_action, used, g))
+                    batch_meta.append((first_action, used, g, plan_tox, plan_ce))
 
             if not batch_z:
                 break
 
-            # One batched dynamics call for the whole layer.
             z_arr = np.stack(batch_z, axis=0)
             g_arr = np.asarray(batch_gene, dtype=np.int64)
             z_next_arr = self._expand(z_arr, g_arr)
             dists = np.linalg.norm(z_next_arr - self.z_ref[None, :], axis=1)
 
-            for idx, ((first_action, used, g), zn, d) in enumerate(
-                zip(batch_meta, z_next_arr, dists, strict=True)
+            for ((first_action, used, g, plan_tox, plan_ce), zn, d) in zip(
+                batch_meta, z_next_arr, dists, strict=True
             ):
                 fa = g if first_action is None else first_action
-                new_candidates.append((zn, fa, used | {g}, float(d)))
+                tox_g, ce_g = self._action_safety_cost(g)
+                new_plan_tox = plan_tox + tox_g
+                new_plan_ce = plan_ce + ce_g
+                new_candidates.append((zn, fa, used | {g}, new_plan_tox, new_plan_ce))
 
-            # Update best across this layer (any depth ≥ 1 is a valid termination point).
-            for _, fa, _, d in new_candidates:
-                if d < best_distance:
-                    best_distance = float(d)
+                score = _score(float(d), path_tox0 + new_plan_tox, path_ce0 + new_plan_ce)
+                if score < best_score:
+                    best_score = score
                     best_first_action = int(fa)  # type: ignore[arg-type]
 
-            # Keep the top-`beam_width` partial plans (sorted by distance).
-            new_candidates.sort(key=lambda x: (x[3], x[1] if x[1] is not None else -1))
+            # Beam pruning is by the safety-augmented score so that the search front
+            # is consistent with the global objective. When λ=0 the score reduces to
+            # `dist` and behavior matches the V2 greedy.
+            new_candidates.sort(key=lambda x: (
+                _score(float(np.linalg.norm(x[0] - self.z_ref)), path_tox0 + x[3], path_ce0 + x[4]),
+                x[1] if x[1] is not None else -1,
+            ))
             beam = new_candidates[: self.beam_width]
 
         return int(best_first_action)

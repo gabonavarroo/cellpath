@@ -70,6 +70,17 @@ rl:
     # R_t = hybrid_alpha · (d_prev - d_next); R_T += hybrid_terminal_bonus · 1[success].
     hybrid_alpha: 1.0
     hybrid_terminal_bonus: 1.0
+    # V3B Phase 2 — safety_aware mode params (Variant C of V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md §4).
+    # R_T = 1·is_success - β·t - λ_tox·tox_path - λ_ce·common_essential_count
+    # Activate by setting `mode: safety_aware` and pointing safety_table_path at the V3B biology
+    # layer parquet built by scripts/build_v3b_biology_layer.py. When mode != safety_aware,
+    # these knobs are inert. λ defaults chosen per plan §4 Variant C; tune in Phase 2 only after
+    # baseline single-axis run shows directional signal.
+    lambda_tox: 0.10
+    lambda_ce: 0.05
+    safety_table_path: null           # e.g. "artifacts_v3/v3b_biology/gene_safety.parquet"
+    permute_chronos: false            # V3B Phase 2 null control — set true for the permuted PPO_C run
+    permute_chronos_seed: 42
 
   # ----- PPO (MaskablePPO from sb3-contrib) -----
   ppo:

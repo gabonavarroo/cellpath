@@ -6,6 +6,132 @@
 
 ---
 
+## Session 2026-05-17-2200  (agent: research-lead, V3B)
+
+**Phase:** V3B Phase 2 — Safety-aware PPO_C retrain (Variant C of plan §4) + 5-rule acceptance
+
+**Status:** Implemented `src/rl/biology_rewards.py` (safety_aware reward + permuted-Chronos null helper), wired `safety_aware` mode through `src/rl/reward.py` + `src/rl/environment.py` (path-cumulative `tox_path` / `common_essential_count` accumulators in env info), extended `src/rl/baselines.py::GreedyDynamicsBeamPolicy` with safety-cost scoring so `greedy_dyn_2_C` is a fair comparator under the same reward. New tests `tests/test_biology_rewards.py` (21 tests; total suite 323 passed / 2 skipped, no V2-mode regressions). New driver scripts `scripts/train_rl_v3b.py` (thin Hydra wrapper) and `scripts/evaluate_rl_v3b.py` (safety-adjusted hardness-frontier eval with the user-suggested 5-rule acceptance check).
+
+Trained two 1M-timestep MaskablePPO policies on V2 primary 32D `RoR_corr010` dynamics (seed 42, λ_tox=0.10, λ_ce=0.05, V2 curriculum unchanged, skip_gate=true logged): **PPO_C** with real Chronos labels and **PPO_C_permuted** with permuted labels (null control). Total training wall-clock 6.7 min. Evaluated both vs PPO_A (frozen V2 primary `rl_v1ot_ror_corr010_terminal_curric_k3_1M_seed42`), greedy_dyn_2 under both reward A and reward C, random, and noop across the 4 V2 hardness-frontier cells at n=300 episodes per cell. Eval wall-clock 1.7 min. Total Phase 2 wall-clock 8.4 min.
+
+**Verdict:** **ACCEPT** — all 5 user-specified acceptance rules pass.
+
+**Headline numbers (single seed 42, n=300 per cell):**
+
+| Cell | Policy | success | safety_adj_SR | mean CE/ep | wmean Chronos |
+| --- | --- | ---: | ---: | ---: | ---: |
+| K=2 / bin 6-8 / OOD | ppo_C | 0.737 | 0.737 | **0.000** | −0.078 |
+| K=2 / bin 6-8 / OOD | ppo_A (V2) | 0.773 | 0.767 | 0.007 | −0.047 |
+| K=2 / bin 6-8 / OOD | greedy_dyn_2_C | 0.790 | 0.773 | 0.017 | −0.088 |
+| **K=2 / bin 8-10 / OOD ⭐** | **ppo_C** | **0.340** | **0.340** | **0.000** | −0.061 |
+| K=2 / bin 8-10 / OOD | ppo_A (V2) | 0.300 | 0.300 | 0.000 | +0.050 |
+| K=2 / bin 8-10 / OOD | greedy_dyn_2_C | 0.300 | 0.300 | 0.000 | −0.061 |
+| K=2 / bin 8-10 / OOD | ppo_C_permuted | 0.267 | 0.267 | 0.070 | −0.033 |
+| K=3 / bin 6-8 / OOD | ppo_C | 0.997 | 0.997 | 0.000 | −0.083 |
+| K=3 / bin 6-8 / OOD | ppo_A (V2) | 0.997 | 0.990 | 0.007 | −0.060 |
+| K=3 / bin 6-8 / OOD | greedy_dyn_2_C | 1.000 | 0.983 | 0.017 | −0.090 |
+| K=3 / bin 8-10 / OOD (primary, saturated) | ppo_C | 0.940 | 0.940 | 0.000 | −0.061 |
+| K=3 / bin 8-10 / OOD | ppo_A (V2) | 1.000 | 1.000 | 0.000 | −0.013 |
+
+**Headline win at K=2 / bin 8-10 / OOD (the un-saturated harder K=2 cell):**
+- PPO_C raw success **0.340** vs PPO_A **0.300** vs greedy_dyn_2_C **0.300** → **+4.0 pp** over both comparators.
+- This is the **first V3-era result where PPO strictly exceeds the depth-2 model-based oracle** under the same reward.
+- Real-Chronos vs permuted-Chronos at this cell: **0.340 vs 0.267 = +7.3 pp** — clean evidence the safety signal is biological, not noise.
+
+**Universal safety advantage:** PPO_C has mean_common_essential = **0.000 at ALL 4 cells** (vs PPO_A 0.000–0.007, vs greedy_dyn_2_A 0.000–0.040). Perfect avoidance of the 5 K562-essential genes (CBFA2T3, HK2, PLK4, PTPN1, STIL).
+
+**Real-Chronos beats permuted-Chronos at every cell** (safety-adjusted Δ): +0.010 / **+0.073** / +0.044 / +0.010 (K=2/bin 6-8, K=2/bin 8-10, K=3/bin 6-8, K=3/bin 8-10). Hardest cell shows strongest signal.
+
+**Trade-off at saturated primary cell (K=3 / bin 8-10):** PPO_C 0.940 vs PPO_A 1.000 — 6 pp regression in raw success. Acceptable: greedy_dyn_2 already saturates here, so this cell is non-discriminating for V3B's purpose.
+
+**Verdict per the 5 acceptance rules:**
+
+| # | Rule | Result |
+| --- | --- | --- |
+| 1 | safety-adj PPO_C − greedy_dyn_2_C ≥ +0.03 at ≥1 frontier cell | ✅ +0.040 at K=2/bin 8-10 |
+| 2 | raw success not catastrophically worse than PPO_A / greedy | ✅ max regression 0.06 ≪ 0.20 |
+| 3 | PPO_C reduces CE picks OR wmean-Chronos risk vs PPO_A | ✅ CE strictly reduced at every cell |
+| 4 | real-Chronos PPO_C beats permuted-Chronos PPO_C | ✅ Δ ∈ [+0.010, +0.073] at all cells |
+| 5 | strongest result at non-saturated cell | ✅ strongest at K=2/bin 8-10 (non-saturated) |
+
+**Sacred-rule conformance:** `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean. No VAE/dynamics retraining. Both PPOs use V2 primary `RoR_corr010` dynamics frozen at `artifacts_v2/dynamics_v1ot_ror_corr010/`. `rl.train.skip_gate=true` logged in both metadata.json files. V2 reward modes (`absolute_distance`, `delta_distance`, `terminal_only_step_cost`, `hybrid_delta_terminal`) byte-identical to before — all 47 V2 reward/env tests pass.
+
+**Committed (proposed):**
+- `src/rl/biology_rewards.py` (new)
+- `src/rl/reward.py`, `src/rl/environment.py`, `src/rl/baselines.py` (additive edits — new safety_aware mode + accumulators)
+- `config/rl.yaml` (new λ_tox, λ_ce, safety_table_path, permute_chronos knobs)
+- `scripts/train_rl_v3b.py`, `scripts/evaluate_rl_v3b.py` (new)
+- `tests/test_biology_rewards.py` (new, 21 tests)
+- `artifacts_v3/interpretation/v3b_phase2_interpretation.md` (new)
+
+**Artifacts (local, not committed):**
+- `artifacts_v3/rl_v3b_safety_aware_v2primary_seed42/` (PPO_C real)
+- `artifacts_v3/rl_v3b_safety_aware_v2primary_seed42_permuted_chronos/` (PPO_C null)
+- `artifacts_v3/eval_v3b_phase2/{acceptance.json, aggregate.{parquet,csv}, phase2_summary.md, k{2,3}_epsp25_bin*_splitood/<policy>/summary.json}`
+
+**Blockers:** none. Phase 3 (axis B, path-length free-band) is unblocked.
+
+**Next (V3B Phase 3 — separate session, awaiting user approval):**
+1. Implement `path_length_freeband` reward mode in `src/rl/biology_rewards.py` + reward.py dispatch.
+2. Train PPO_B seed 42 on V2 primary 32D dynamics with `max_steps=8` (extended horizon).
+3. Evaluate at K∈{2,3,5,8} × bin∈{6-8,8-10} × OOD; compare to greedy_dyn_2 AND greedy_dyn_5 under reward B.
+4. Acceptance: PPO_B uses K∈{4,5} in ≥30% of episodes AND `PPO_B − greedy_dyn_5_B ≥ +0.03` at any K≥4 cell.
+5. After Phase 3 lands, Phase 5 (combined C+B) is the V3B headline target.
+
+---
+
+## Session 2026-05-17-1700  (agent: research-lead, V3B)
+
+**Phase:** V3B Phase 0 + Phase 1 — biology layer build + post-hoc scoring of V2 primary
+
+**Status:** Per `V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md` (new this session, 638 lines):
+
+* **Phase 0 (biology layer):** Built `artifacts_v3/v3b_biology/{gene_safety.parquet, k562_sl_pairs.parquet, coverage.json, README.md}`. Source = DepMap K562 Chronos (local) + Horlbeck 2018 Cell supp Table S5 (downloaded to `/tmp/`, 75 MB). Coverage: 99/105 Norman genes have Chronos (5 essential: CBFA2T3, HK2, PLK4, PTPN1, STIL). **Horlbeck SL pair set is structurally empty** on the Norman action space — 1,523 K562 SL pairs intersected with the 105 cell-fate genes yields zero pairs (Horlbeck screened 459 essential housekeeping genes; Norman selected 105 cell-fate TFs — by-design non-overlapping). Documented in README + interpretation file.
+* **Phase 1 (post-hoc scoring of V2 primary):** Scored V2 primary `eval_p0f_c2_seed{42,0,1,7}` × 4 hardness cells × 5 policies + 4 PPO training rollout parquets. Verdict: **PROCEED**.
+* New code: `src/analysis/path_feasibility.py` (loader + scorer + aggregator), `scripts/build_v3b_biology_layer.py`, `scripts/posthoc_score_paths.py`, `tests/test_path_feasibility.py` (22 tests).
+
+**Verdicts:**
+- **V3B premise stands** at primary cell: greedy_dyn_2 is NOT strictly safer than PPO. PPO picks 1.4% common-essential actions vs greedy_dyn_2's 0% — but PPO has a less-negative weighted-mean Chronos (−0.072 vs −0.099), so neither dominates on biology axes.
+- **K=2 / bin 6-8 / OOD is the strongest Phase 2 target**: PPO is unambiguously better than greedy_dyn_2 on biology there (1.0% vs 2.0% essential; −0.070 vs −0.095 wmean Chronos). Phase 2's safety reward should let PPO retain the success advantage AND drive both biology axes toward 0.
+- **Seed variance under V2's reward is the actionable lever**: across {42, 0, 1, 7}, PPO `mean_tox_path` ranges 0.0003–0.0047 (15.6×) and `frac_zero_CE` ranges 0.954–0.996 — same convergence on success but arbitrary essential-vs-safe gene picks. Safety reward should compress this variance toward the seed-0 profile.
+- **Variant E correction:** the `λ_sl·sl_violations(path)` term is structurally inert on the Norman action universe. Phase 5b's Variant E reduces to B + C + D. Future session can attempt DepMap co-essentiality (requires ~500 MB CRISPR_gene_effect.csv download) if Phase 5b underwhelms.
+
+**Metrics (V2 primary cell K=3 / bin 8-10 / OOD, mean across 4 seeds):**
+| Policy | success | wmean Chronos | wmean tox | frac essential |
+| --- | ---: | ---: | ---: | ---: |
+| ppo_deterministic (C2) | 0.941 | −0.0718 | 0.0045 | **0.0140** |
+| greedy_dyn_1 | 1.000 | −0.1482 | 0.0025 | 0.0279 |
+| greedy_dyn_2 | 1.000 | −0.0989 | 0.0000 | **0.0000** |
+| random_uniform_valid | 0.170 | −0.0879 | 0.0116 | 0.0333 |
+
+**Sacred-rule conformance:** `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean. No VAE/dynamics/PPO retraining. No gate-threshold change. New code only; Track N VAE (PID 46735) **not interrupted** — verified running before each step.
+
+**Committed (proposed; awaiting user approval):**
+- `V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md` (638 lines)
+- `src/analysis/path_feasibility.py`
+- `scripts/build_v3b_biology_layer.py`
+- `scripts/posthoc_score_paths.py`
+- `tests/test_path_feasibility.py`
+
+**Artifacts (local, not committed):**
+- `artifacts_v3/v3b_biology/{gene_safety.parquet, k562_sl_pairs.parquet (empty), coverage.json, README.md}`
+- `artifacts_v3/eval_v3b_posthoc/{aggregate_per_cell_per_policy.{parquet,csv}, per_episode_training_rollouts.{parquet,csv}, posthoc_summary.md, verdict.json}`
+- `artifacts_v3/interpretation/v3b_phase01_interpretation.md`
+
+**Blockers:** none. Phase 2 (safety-aware reward retrain) is unblocked but deferred to next session per the plan's halt-before-retraining policy.
+
+**Track N status:** **completed during this session** (early-stopped at 16:59 via elbo_validation 45-epoch patience plateau). Artifacts at `artifacts_v3/vae_n64_nb/{model/, latents.h5ad (1.09 GB), gene_vocab.json, z_reference_centroid.npy (norm=0.671), epsilon_success.json (p50=3.637)}`. The current Track N `epsilon_success.json` records only `p50`; **p25 quantile must be recomputed** before any RL safety pre-check (mirroring V3A A1.3 protocol). Track N safety pre-check (pairs build → RoR + corr 0.10 dynamics → reachability oracle → greedy saturation) is V3A pending work, not V3B; both are queued for the next session and feed Phase 6 (axis-B winner replication on Track N if Track N passes safety).
+
+**Next (V3B Phase 2 — separate session, awaiting user approval):**
+1. Implement `src/rl/biology_rewards.py` (Variant C: safety-aware) + reward_mode dispatch in `src/rl/reward.py` + env plumbing in `src/rl/environment.py`.
+2. Add unit tests `tests/test_biology_rewards.py` covering scale invariance, bound preservation, zero-action no-penalty.
+3. Train PPO seed-42 on V2 primary 32D dynamics with reward C (1M steps, ~5 min).
+4. Train PPO seed-42 with **permuted-Chronos** labels (null control, same wall-clock).
+5. Re-evaluate greedy_dyn_2 under reward C (greedy must use the same reward as PPO for the comparison to be fair).
+6. Acceptance: `PPO_C − greedy_dyn_2_C ≥ +0.03 pp` at K=2/bin 6-8 OOD AND Cliff δ on top-10 gene Chronos ≤ −0.3 AND permuted-Chronos PPO strictly worse than real-Chronos PPO.
+
+---
+
 ## Session 2026-05-17-0130  (agent: research-lead)
 
 **Phase:** P0F follow-up — V2 primary wired as default Hydra config

@@ -85,3 +85,28 @@ eval_ablations_dir: ${paths.eval_dir}/ablations
 # V2 wrap-up output paths
 v2_final_report: ${paths.artifacts_v2}/V2_FINAL_REPORT.md
 v2_seed_aggregate_dir: ${paths.artifacts_v2}/eval_p0f_seed_aggregate
+
+# --- V3A path keys (additive, do not break V1/V2 default composition) ---
+# All V3A writes route under ${paths.artifacts_v3}, which itself resolves to
+# ${paths.root}/artifacts_v3 (declared above). artifacts_64/, artifacts_v2/,
+# and artifacts/ are frozen tiers — V3A reads from them but never writes.
+
+# Track L — legacy 64D VAE reuse (copy of artifacts_64/vae/)
+v3_legacy_vae_dir:        ${paths.artifacts_v3}/vae_n64_legacy
+v3_legacy_vae_latents:    ${paths.v3_legacy_vae_dir}/latents.h5ad
+v3_legacy_vae_centroid:   ${paths.v3_legacy_vae_dir}/z_reference_centroid.npy
+v3_legacy_vae_eps:        ${paths.v3_legacy_vae_dir}/epsilon_success.json
+v3_legacy_vae_gene_vocab: ${paths.v3_legacy_vae_dir}/gene_vocab.json
+v3_legacy_pairs_dir:      ${paths.artifacts_v3}/pairs_n64_legacy
+v3_legacy_dynamics_dir:   ${paths.artifacts_v3}/dynamics_n64_legacy_ror_corr010
+
+# Track N — fresh 64D NB VAE (V3A first-run)
+v3_nb_vae_dir:            ${paths.artifacts_v3}/vae_n64_nb
+v3_nb_pairs_dir:          ${paths.artifacts_v3}/pairs_n64_nb
+v3_nb_dynamics_dir:       ${paths.artifacts_v3}/dynamics_n64_nb_ror_corr010
+
+# V3A diagnostics / eval
+v3_reach_dir:             ${paths.artifacts_v3}/reachability_probe_v3a
+v3_eval_dir:              ${paths.artifacts_v3}/eval_v3a_hardness
+v3_figures_dir:           ${paths.artifacts_v3}/figures
+v3_interpretation_dir:    ${paths.artifacts_v3}/interpretation

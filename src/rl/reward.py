@@ -51,6 +51,10 @@ def compute_reward(
     step_idx: int = 0,
     hybrid_alpha: float = 1.0,
     hybrid_terminal_bonus: float = 1.0,
+    tox_path: float = 0.0,
+    common_essential_count: int = 0,
+    lambda_tox: float = 0.10,
+    lambda_ce: float = 0.05,
 ) -> float:
     """Scalar reward for one transition.
 
@@ -135,10 +139,32 @@ def compute_reward(
         reward = float(hybrid_alpha) * float(distance_scale) * (float(prev_distance) - d_next)
         if (terminated or truncated) and is_success:
             reward += float(hybrid_terminal_bonus)
+    elif reward_mode == "safety_aware":
+        # V3B Phase 2 Variant C — terminal_only_step_cost + path-cumulative safety penalty.
+        # Mid-episode reward = 0; the env passes tox_path / common_essential_count at terminal.
+        # Setting lambda_tox = lambda_ce = 0 recovers terminal_only_step_cost exactly.
+        from src.rl.biology_rewards import safety_aware_reward
+        reward = safety_aware_reward(
+            is_success=is_success,
+            terminated=terminated,
+            truncated=truncated,
+            step_idx=step_idx,
+            tox_path=tox_path,
+            common_essential_count=common_essential_count,
+            beta_step_cost=beta_step_cost,
+            lambda_tox=lambda_tox,
+            lambda_ce=lambda_ce,
+            distance_scale=distance_scale,
+        )
+        # Variant C does NOT also apply sparsity / unc / success_bonus / failure_penalty
+        # (those terms are part of the *V2 modes'* shaping). Return early to avoid
+        # double-counting.
+        return float(reward)
     else:
         raise ValueError(
             f"Unknown reward_mode {reward_mode!r}. Choose from "
-            "{'absolute_distance', 'delta_distance', 'terminal_only_step_cost'}."
+            "{'absolute_distance', 'delta_distance', 'terminal_only_step_cost', "
+            "'hybrid_delta_terminal', 'safety_aware'}."
         )
 
     # --- 2. Sparsity penalty (gene actions only, D7) ----------------------

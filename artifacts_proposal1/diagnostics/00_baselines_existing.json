@@ -1,0 +1,34 @@
+{
+  "v1_ot_eps005": {
+    "n_genes": 84,
+    "median_noise_ratio": 0.8935399957502466,
+    "mean_noise_ratio": 0.8666172263333927,
+    "p25_noise_ratio": 0.8126790733120934,
+    "p75_noise_ratio": 0.94855539348939,
+    "max_noise_ratio": 0.9814864570789619
+  },
+  "soft_ot_eps005": {
+    "n_genes": 84,
+    "median_noise_ratio": 0.7829037979150808,
+    "mean_noise_ratio": 0.7605924309057502,
+    "p25_noise_ratio": 0.6483635031998364,
+    "p75_noise_ratio": 0.8789249274944866,
+    "max_noise_ratio": 0.9648907655315743
+  },
+  "mean_delta": {
+    "n_genes": 84,
+    "median_noise_ratio": 0.8493392964948507,
+    "mean_noise_ratio": 0.8100194822723836,
+    "p25_noise_ratio": 0.7146851781384179,
+    "p75_noise_ratio": 0.920020002175317,
+    "max_noise_ratio": 0.9771294861357472
+  },
+  "random": {
+    "n_genes": 84,
+    "median_noise_ratio": 0.9495151734780635,
+    "mean_noise_ratio": 0.9230333634222883,
+    "p25_noise_ratio": 0.8837431274770975,
+    "p75_noise_ratio": 0.9747197458228081,
+    "max_noise_ratio": 0.9903535923999743
+  }
+}

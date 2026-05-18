@@ -1,0 +1,68 @@
+{
+  "passed": false,
+  "primary": {
+    "r2": 0.2985961040046068,
+    "pearson_r": 0.5223597288131714,
+    "baselines": {
+      "no_op": {
+        "r2": -0.00011131609114389818,
+        "pearson_r": 0.0
+      },
+      "global_mean_delta": {
+        "r2": -0.0003623195598430051,
+        "pearson_r": 0.0
+      },
+      "per_gene_mean_delta": {
+        "r2": -0.0003623195598430051,
+        "pearson_r": 0.0
+      },
+      "linear_ridge": {
+        "r2": 0.18187629062264543,
+        "pearson_r": 0.4455187916755676
+      },
+      "nearest_neighbor": {
+        "r2": 0.026376899772244222,
+        "pearson_r": 0.33118459582328796
+      }
+    },
+    "margin_checks": {
+      "margin_vs_noop_r2": {
+        "value": 0.2987074200957507,
+        "threshold": 0.1,
+        "pass": true
+      },
+      "margin_vs_global_mean_r2": {
+        "value": 0.2989584235644498,
+        "threshold": 0.05,
+        "pass": true
+      },
+      "margin_vs_per_gene_mean_r2": {
+        "value": 0.2989584235644498,
+        "threshold": 0.0,
+        "pass": true
+      },
+      "margin_vs_linear_ridge_pearson": {
+        "value": 0.07684093713760376,
+        "threshold": 0.03,
+        "pass": true
+      },
+      "margin_vs_knn_r2": {
+        "value": 0.27221920423236257,
+        "threshold": 0.03,
+        "pass": true
+      }
+    }
+  },
+  "uncertainty_calibration": {
+    "spearman": 0.13591423926176865,
+    "pass": false
+  },
+  "margins_used": {
+    "margin_vs_noop_r2": 0.1,
+    "margin_vs_global_mean_r2": 0.05,
+    "margin_vs_per_gene_mean_r2": 0.0,
+    "margin_vs_linear_ridge_pearson": 0.03,
+    "margin_vs_knn_r2": 0.03,
+    "min_uncertainty_calibration_spearman": 0.2
+  }
+}

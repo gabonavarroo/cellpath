@@ -1,0 +1,189 @@
+{
+  "baselines_existing": {
+    "v1_ot_eps005": {
+      "n_genes": 84,
+      "median_noise_ratio": 0.8935399957502466,
+      "mean_noise_ratio": 0.8666172263333927,
+      "p25_noise_ratio": 0.8126790733120934,
+      "p75_noise_ratio": 0.94855539348939,
+      "max_noise_ratio": 0.9814864570789619
+    },
+    "soft_ot_eps005": {
+      "n_genes": 84,
+      "median_noise_ratio": 0.7829037979150808,
+      "mean_noise_ratio": 0.7605924309057502,
+      "p25_noise_ratio": 0.6483635031998364,
+      "p75_noise_ratio": 0.8789249274944866,
+      "max_noise_ratio": 0.9648907655315743
+    },
+    "mean_delta": {
+      "n_genes": 84,
+      "median_noise_ratio": 0.8493392964948507,
+      "mean_noise_ratio": 0.8100194822723836,
+      "p25_noise_ratio": 0.7146851781384179,
+      "p75_noise_ratio": 0.920020002175317,
+      "max_noise_ratio": 0.9771294861357472
+    },
+    "random": {
+      "n_genes": 84,
+      "median_noise_ratio": 0.9495151734780635,
+      "mean_noise_ratio": 0.9230333634222883,
+      "p25_noise_ratio": 0.8837431274770975,
+      "p75_noise_ratio": 0.9747197458228081,
+      "max_noise_ratio": 0.9903535923999743
+    }
+  },
+  "noise_new_sweeps": {},
+  "dynamics_new_runs": {
+    "v1ot": {
+      "dir": "/Users/regina/Desktop/cellpath/artifacts_proposal1/dynamics_v1ot_ror",
+      "gate_passed": false,
+      "val_pearson": 0.6198841333389282,
+      "val_r2": 0.40457215668461544,
+      "ood_pearson": 0.5223597288131714,
+      "ood_r2": 0.2985961040046068,
+      "epochs_run": 81,
+      "best_gate_epoch": 55,
+      "best_gate_margin": 0.011970877647399902,
+      "use_residual_over_ridge": true,
+      "use_state_linear_skip": false,
+      "lambda_corr": null,
+      "val_ridge_pearson": 0.6079132556915283,
+      "val_margin_vs_ridge_pearson": 0.011970877647399902,
+      "ood_ridge_pearson": 0.4455187916755676,
+      "ood_margin_vs_ridge_pearson": 0.07684093713760376
+    },
+    "soft_ot": {
+      "dir": "/Users/regina/Desktop/cellpath/artifacts_proposal1/dynamics_soft_ot_ror",
+      "gate_passed": true,
+      "val_pearson": 0.9399882555007935,
+      "val_r2": 0.884524296710174,
+      "ood_pearson": 0.833382248878479,
+      "ood_r2": 0.6514439890777499,
+      "epochs_run": 61,
+      "best_gate_epoch": 58,
+      "best_gate_margin": 0.047521114349365234,
+      "use_residual_over_ridge": true,
+      "use_state_linear_skip": false,
+      "lambda_corr": null,
+      "val_ridge_pearson": 0.8924671411514282,
+      "val_margin_vs_ridge_pearson": 0.047521114349365234,
+      "ood_ridge_pearson": 0.7407603859901428,
+      "ood_margin_vs_ridge_pearson": 0.09262186288833618
+    },
+    "mean_delta": {
+      "dir": "/Users/regina/Desktop/cellpath/artifacts_proposal1/dynamics_mean_delta_ror",
+      "gate_passed": null,
+      "val_pearson": null,
+      "val_r2": null,
+      "ood_pearson": null,
+      "ood_r2": null,
+      "epochs_run": null,
+      "best_gate_epoch": null,
+      "best_gate_margin": null,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": null,
+      "lambda_corr": null,
+      "val_ridge_pearson": null,
+      "val_margin_vs_ridge_pearson": null,
+      "ood_ridge_pearson": null,
+      "ood_margin_vs_ridge_pearson": null
+    },
+    "ot_eps001": {
+      "dir": "/Users/regina/Desktop/cellpath/artifacts_proposal1/dynamics_ot_eps001_ror",
+      "gate_passed": null,
+      "val_pearson": null,
+      "val_r2": null,
+      "ood_pearson": null,
+      "ood_r2": null,
+      "epochs_run": null,
+      "best_gate_epoch": null,
+      "best_gate_margin": null,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": null,
+      "lambda_corr": null,
+      "val_ridge_pearson": null,
+      "val_margin_vs_ridge_pearson": null,
+      "ood_ridge_pearson": null,
+      "ood_margin_vs_ridge_pearson": null
+    },
+    "ot_eps002": {
+      "dir": "/Users/regina/Desktop/cellpath/artifacts_proposal1/dynamics_ot_eps002_ror",
+      "gate_passed": null,
+      "val_pearson": null,
+      "val_r2": null,
+      "ood_pearson": null,
+      "ood_r2": null,
+      "epochs_run": null,
+      "best_gate_epoch": null,
+      "best_gate_margin": null,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": null,
+      "lambda_corr": null,
+      "val_ridge_pearson": null,
+      "val_margin_vs_ridge_pearson": null,
+      "ood_ridge_pearson": null,
+      "ood_margin_vs_ridge_pearson": null
+    },
+    "soft_ot_eps001": {
+      "dir": "/Users/regina/Desktop/cellpath/artifacts_proposal1/dynamics_soft_ot_eps001_ror",
+      "gate_passed": null,
+      "val_pearson": null,
+      "val_r2": null,
+      "ood_pearson": null,
+      "ood_r2": null,
+      "epochs_run": null,
+      "best_gate_epoch": null,
+      "best_gate_margin": null,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": null,
+      "lambda_corr": null,
+      "val_ridge_pearson": null,
+      "val_margin_vs_ridge_pearson": null,
+      "ood_ridge_pearson": null,
+      "ood_margin_vs_ridge_pearson": null
+    }
+  },
+  "dynamics_references_on_disk": {
+    "artifacts/dynamics  (V1, state_linear_skip, OT eps=0.05)": {
+      "gate_passed": false,
+      "val_pearson": 0.6176021099090576,
+      "ood_pearson": 0.49535122513771057,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": true,
+      "lambda_corr": null,
+      "n_latent": 32,
+      "val_margin_vs_ridge_pearson": 0.009688854217529297
+    },
+    "artifacts_v2_experiments/dynamics_soft_ot_default  (V2 soft_ot, state_linear_skip)": {
+      "gate_passed": true,
+      "val_pearson": 0.9337748289108276,
+      "ood_pearson": 0.7433643341064453,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": true,
+      "lambda_corr": null,
+      "n_latent": 32,
+      "val_margin_vs_ridge_pearson": 0.04130762815475464
+    },
+    "artifacts_v2_experiments/dynamics_mean_delta_corr_010  (V2 mean_delta, RoR+corr0.10)": {
+      "gate_passed": false,
+      "val_pearson": 0.5200098752975464,
+      "ood_pearson": 0.3835945129394531,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": true,
+      "lambda_corr": null,
+      "n_latent": 32,
+      "val_margin_vs_ridge_pearson": 0.022738993167877197
+    },
+    "artifacts_64/dynamics  (64D legacy, state_linear_skip)": {
+      "gate_passed": false,
+      "val_pearson": 0.5964917540550232,
+      "ood_pearson": 0.3686137795448303,
+      "use_residual_over_ridge": null,
+      "use_state_linear_skip": true,
+      "lambda_corr": null,
+      "n_latent": 64,
+      "val_margin_vs_ridge_pearson": -0.01907038688659668
+    }
+  }
+}

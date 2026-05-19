@@ -42,10 +42,12 @@ def build_overrides(args: argparse.Namespace, repo_root: Path) -> list[str]:
             f"Run scripts/build_v3b_biology_layer.py first."
         )
 
-    # Naming convention: rl_v3b_<reward>_<latent>_seed<N>[_permuted]
+    # Naming convention (post-Phase 2c, 2026-05-18): rl_v3b_safety_aware_seed<N>[_permuted_chronos].
+    # Phase 2 used the rl_v3b_safety_aware_v2primary_seed{N} format; those dirs are symlinked
+    # to the new naming so all 4 seeds share a consistent path template for downstream aggregation.
     permute_tag = "_permuted_chronos" if args.permute_chronos else ""
     rl_dir = (
-        f"artifacts_v3/rl_v3b_safety_aware_v2primary_seed{args.seed}{permute_tag}"
+        f"artifacts_v3/rl_v3b_safety_aware_seed{args.seed}{permute_tag}"
     )
 
     overrides: list[str] = [

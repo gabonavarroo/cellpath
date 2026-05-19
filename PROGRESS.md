@@ -6,6 +6,156 @@
 
 ---
 
+## Session 2026-05-18-1700  (agent: research-lead, V3B)
+
+**Phase:** V3B Phase 2c — 4-seed escalation of safety-aware PPO_C + Replogle held-out (Bucket-C)
+
+**Status:** Trained 6 new PPOs (seeds {0, 1, 7} × {real, permuted} Chronos, 1M timesteps each, ~3.4 min each) on V2 primary 32D `RoR_corr010` dynamics. Reused Phase 2 seed-42 checkpoints (symlinked to the user-spec naming `rl_v3b_safety_aware_seed42*`). Evaluated all 4 seeds on the V2 hardness frontier at n=300 episodes per cell. Added a held-out Bucket-C source by parsing the Harmonizome mirror of [Replogle 2022 K562 essential Perturb-seq](https://maayanlab.cloud/Harmonizome/dataset/Replogle+et+al.,+Cell,+2022+K562+Essential+Perturb-seq+Gene+Perturbation+Signatures) — Replogle CRISPRi K562 (independent of DepMap Chronos CRISPR-Cas9). Wrote 4-seed paired-CI aggregator (`scripts/aggregate_v3b_phase2c.py`). Total wall-clock: ~30 min.
+
+**Verdict: `PHASE2C_PROMISING_BUT_UNSTABLE_SEED_VARIANCE_DOMINATES`** (1/3 strict criteria pass; the leakage-safe Phase 2 single-seed headline does not survive seed escalation).
+
+**Acceptance criteria (4-seed paired deltas, n=300/cell):**
+
+| # | Rule | Result | Passed |
+| --- | --- | --- | --- |
+| 1 | 4-seed CI on PPO_C − PPO_A raw success at K=2/bin 8-10/OOD strictly excludes zero | **+0.0092** [−0.0464, +0.0647] | ❌ |
+| 2 | 4-seed CI on real − permuted raw success at K=2/bin 8-10/OOD strictly excludes zero | **−0.0217** [−0.1295, +0.0861] | ❌ |
+| 3 | PPO_C raw success at K=2/bin 6-8/OOD ≥ PPO_A − 0.05 | PPO_C=0.7425 vs PPO_A=0.7733 (regression 0.031 ≤ 0.05) | ✅ |
+
+**What collapsed under 4-seed escalation:**
+- Phase 2's +4 pp single-seed headline at K=2/bin 8-10/OOD → 4-seed mean +0.9 pp, CI straddles zero. Per-seed [42, 0, 1, 7] = [+0.04, −0.03, −0.04, +0.07] — half the seeds positive, half negative.
+- Phase 2's real-vs-permuted +7.3 pp signal at the same cell → 4-seed mean −2.2 pp (DIRECTION FLIPPED). Seeds 0 and 1 have permuted > real on raw success.
+- PPO_C shows a **significant regression** at K=2/bin 6-8/OOD: 4-seed Δ = −3.1 pp [−5.0, −1.2] vs PPO_A, and −4.8 pp [−6.7, −2.8] vs greedy_dyn_2_C.
+- PPO_C loses 6 pp at K=3/bin 8-10/OOD primary (deterministic across seeds; pure constraint cost).
+
+**What survives 4-seed escalation — Bucket A (reward-fit, expected by construction):**
+- `mean_tox_path` for PPO_C: **0.000 ± 0.000** at every (cell, seed).
+- `mean_common_essential_per_ep` for PPO_C: **0.000 ± 0.000** at every (cell, seed).
+- Permuted-Chronos PPO_C has mean_CE/ep = 0.022–0.032 with seed std ≥ 0.024 → does NOT achieve the safety profile. Label structure IS load-bearing for the reward-fit metric (just not for raw success).
+
+**Bucket C (held-out validation) — Replogle K562 essentials added:**
+- 6 of 105 Norman genes are Replogle-essential: FOXL2, KIF18B, NCL, PLK4, SET, STIL.
+- DepMap-essential ∩ Norman 105 = 5 genes (CBFA2T3, HK2, PLK4, PTPN1, STIL); agreement with Replogle = 2 (PLK4, STIL).
+- **Replogle-only essentials** (FOXL2, KIF18B, NCL, SET) are the Bucket-C clean test: PPO_C should avoid them if the DepMap prior generalizes.
+- Paired-by-seed Δ(PPO_C − PPO_A) on `frac_actions_replogle_only_essential`: every cell shows **non-negative** mean (entirely driven by seed 42); CIs all straddle zero.
+- **Held-out verdict: `HELDOUT_INCONCLUSIVE_NO_GENERALIZATION_DETECTED`.** The DepMap-Chronos safety prior shows no held-out generalization advantage on the Replogle assay. PPO_A's natural 0 % Replogle-essential pick rate leaves no Bucket-C floor for PPO_C to beat. The safety reward is DepMap-specific, not "essentiality-aware in general".
+
+**Phase 2 → 2b → 2c progression:**
+
+| | Phase 2 (single seed 42) | Phase 2b (audit) | Phase 2c (4-seed) |
+|---|---|---|---|
+| Bucket-A | ✅ Zero CE, low tox | ✅ Reframed as reward-fit | ✅ Solid across 4 seeds |
+| Bucket-B at K=2/bin 8-10 raw | +4 pp single-seed | Within V2 noise band | **+0.9 pp [−4.6, +6.5]** CI straddles 0 |
+| Real vs permuted raw | +7.3 pp single-seed | Single-seed | **−2.2 pp** — direction flipped |
+| Bucket-B at K=2/bin 6-8 raw | −3.7 pp | Counterexample to headline | **−3.1 pp [−5.0, −1.2]** significant regression |
+| Bucket-C | Pending | Pending | **`INCONCLUSIVE_NO_GENERALIZATION_DETECTED`** |
+| Verdict | `ACCEPT` (5/5 rules) | `PHASE2_VALID_REWARD_FIT_NEEDS_SEED_ESCALATION` | **`PHASE2C_PROMISING_BUT_UNSTABLE_SEED_VARIANCE_DOMINATES`** |
+
+**Seed 42 reused?** YES — symlinked from Phase 2 (`artifacts_v3/rl_v3b_safety_aware_seed42` → `rl_v3b_safety_aware_v2primary_seed42`). Seeds {0, 1, 7} × {real, permuted} = 6 new PPOs trained this session.
+
+**Phase 3 unlocked?** YES — but Variant C is NOT the V3B headline. Carry Variant C forward as a known-good Bucket-A safety constraint (not a planning-advantage claim). Recommended next: **Phase 3 path-length B** (no biology dependency; reward-independent question of long-horizon planning). Do NOT spend further compute tuning λ_tox / λ_ce alone — seed variance dominates the Bucket-B signal at the current parameters. The Phase 5 (C + B conjunction) should target headline only if Phase 3 shows clean Bucket-B signal independently.
+
+**Sacred-rule conformance:**
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean (only pre-existing untracked entries).
+- Phase 2 PPO checkpoints, Phase 2 eval outputs, Phase 2 interpretation, Phase 2b audit — all unchanged.
+- Phase 2c new outputs all under `artifacts_v3/eval_v3b_phase2c/` and `artifacts_v3/interpretation/v3b_phase2c_seed_escalation.md`.
+- Only code edit: `scripts/train_rl_v3b.py` line ~46 (path naming template; backward-compat via symlinks).
+- New code: `scripts/aggregate_v3b_phase2c.py` (4-seed aggregator + acceptance check).
+- Test suite: **305 passed / 2 skipped**, no regressions (no test files edited; only training+eval ran).
+
+**Committed (proposed):**
+- `scripts/train_rl_v3b.py` (4-line naming template update)
+- `scripts/aggregate_v3b_phase2c.py` (new)
+- `artifacts_v3/eval_v3b_phase2c/{seed_escalation_*, replogle_*}` (8 new files)
+- `artifacts_v3/interpretation/v3b_phase2c_seed_escalation.md` (new)
+- PROGRESS.md (this entry)
+
+**Artifacts (local, not committed):**
+- 6 new PPO directories `artifacts_v3/rl_v3b_safety_aware_seed{0,1,7}{_permuted_chronos}/`
+- 2 symlinks `artifacts_v3/rl_v3b_safety_aware_seed42{_permuted_chronos}` → Phase 2 dirs
+- 4 per-seed eval directories `artifacts_v3/eval_v3b_phase2c/seed{42,0,1,7}/`
+
+**Blockers:** none.
+
+**Next (V3B Phase 3 — separate session, awaiting user approval):**
+1. Implement `path_length_freeband` reward mode in `src/rl/biology_rewards.py` (no biology dependency).
+2. Train PPO_B seed 42 on V2 primary dynamics with `env.max_steps=8`, `g(t)` schedule per V3B plan §6.3.
+3. If single-seed shows directional signal at K ∈ {4, 5} cells → escalate to 4 seeds INVEST.
+4. Acceptance from the start: 4-seed 95 % CI on `PPO_B − greedy_dyn_5_B raw` at any K ≥ 4 cell strictly excludes zero; AND PPO_B uses K ∈ {4, 5} in ≥ 30 % of episodes.
+
+---
+
+## Session 2026-05-18-1200  (agent: research-lead, V3B audit)
+
+**Phase:** V3B Phase 2b — Leakage-safe + split-strictness audit of Phase 2 (no code changes, no PPO retraining)
+
+**Status:** Audited Phase 2's safety-aware PPO_C result for (a) reward-source leakage between training reward and reported metrics, (b) start-pool split-strictness against the OOD gene set. Read-only over Phase 2 artifacts; Phase 2 PPO checkpoints, eval summaries, and interpretation file unchanged.
+
+**Verdict: `PHASE2_VALID_REWARD_FIT_NEEDS_SEED_ESCALATION`.**
+
+Sub-verdicts:
+* Split-strictness: **`DEV_BENCHMARK_ONLY_OOD_START_LEAKAGE`**. PPO_C training start pool is built by `src/rl/environment.py::_build_start_pool` with `pert_idx != 0` filter only (no gene-split filter). Of 99 590 perturbed cells, 14 549 (14.6 %) are perturbed by the 21 OOD-held-out genes — including RUNX1T1, ZNF318, FOXO4 which appear in V2 primary's top-10 action_freq. `DistanceCurriculumCallback` also reads all-perturbed cells without gene-split filtering. The hard-bench OOD-ness is at the dynamics model's gene-action extrapolation level (dynamics trained on 84-train-gene pairs only), NOT at the start-state distribution level. This is the V2 protocol; V3B inherits it. **PPO_C vs PPO_A relative comparison is internally consistent** (both saw the same start distribution); the absolute claim should be reframed as a "development hard benchmark" rather than "blind OOD".
+* Held-out biological validation: **`pending_no_local_source`**. No Bucket-C source available locally (Replogle 2022 K562 essential CRISPRi Perturb-seq, OGEE v3, COSMIC CGC, Open Targets all absent).
+
+**Metric classification:**
+* **Bucket A (reward-fit)** — all Chronos-derived: `mean_tox_path`, `mean_common_essential_per_ep`, `weighted_mean_chronos`, `safety_adjusted_success_rate`, `fraction_zero_common_essential`, etc. Optimizing these is what PPO_C was trained to do; improvement is expected by construction, NOT biological discovery.
+* **Bucket B (reward-independent)** — `success_rate` (raw), `mean_steps`, `mean_final_distance`, and the deltas `PPO_C − PPO_A`, `PPO_C − greedy_dyn_2_C`, `PPO_C − greedy_dyn_2_A`, `real − permuted` all on raw success.
+* **Bucket C (held-out biological validation)** — empty.
+
+**Leakage-safe headline (Bucket B only, single seed):**
+
+| Cell | Δ(PPO_C − PPO_A) raw | Δ(PPO_C − greedy_dyn_2_C) raw | Δ(real − permuted) raw |
+| --- | ---: | ---: | ---: |
+| K=2 / bin 6-8 / OOD | **−0.037** | **−0.053** | −0.037 |
+| **K=2 / bin 8-10 / OOD ⭐** | **+0.040** | **+0.040** | **+0.073** |
+| K=3 / bin 6-8 / OOD | 0.000 | −0.003 | −0.003 |
+| K=3 / bin 8-10 / OOD (saturated) | −0.060 | −0.060 | −0.060 |
+
+The reward-independent picture is **mixed**, not uniformly positive: 1 of 4 cells (K=2 / bin 8-10 / OOD) shows the +4 pp headline; 1 cell (K=2 / bin 6-8) shows a **−3.7 pp regression**; 2 cells (K=3) are saturated or with mild regression. **V2's measured C2 seed-std at K=2 / bin 8-10 / OOD is 0.045** — the +0.040 single-seed delta sits inside the seed-noise window. **The Phase 2 ACCEPT verdict was over-stated** when collapsed to a single rating; the leakage-safe restatement is "PPO_C optimizes its reward as designed (Bucket A); the reward-independent +4 pp at one cell is single-seed and within V2's measured seed-CI of zero (Bucket B); no independent biological validation yet (Bucket C)".
+
+**Phase 2 acceptance rules after audit:**
+| # | Rule | Bucket | Status after audit |
+| --- | --- | --- | --- |
+| 1 | safety-adj PPO_C − greedy_dyn_2_C ≥ +0.03 at ≥ 1 cell | A | DOWNGRADED — reward-fit; reword as "planning advantage on the safety-aware objective" |
+| 2 | raw success not catastrophic | B | STANDS — max regression 6 pp, well below 20 pp catastrophic threshold |
+| 3 | safety reduction vs PPO_A | A | DOWNGRADED — reward-fit; expected by construction |
+| 4 | real beats permuted | A on safety-adj, B on raw | PARTIAL HOLD — raw-success version (+7.3 pp at K=2 / bin 8-10) is the cleanest Bucket-B signal |
+| 5 | strongest at non-saturated cell | A | STANDS — strongest is K=2 / bin 8-10 (Bucket-B headline cell) |
+
+**Recommended next action — primary:** run **4-seed escalation of PPO_C** (seeds {42, 0, 1, 7} × real + permuted = 8 PPO retrains × ~3.4 min + 4 evals × ~1.7 min ≈ 35 min wall-clock) before any new reward variant. Acceptance: 4-seed 95 % CI on `PPO_C − PPO_A` raw success at K=2 / bin 8-10 / OOD strictly excludes zero, AND `real − permuted` raw at the same cell also excludes zero. If both pass → Phase 2 headline is statistically established and Phase 3 path-length B is unlocked. If straddles zero → revise λ or proceed to Phase 3 first and revisit C in conjunction.
+
+**Recommended next action — secondary (parallel, optional):** download Replogle 2022 K562 essential CRISPRi Perturb-seq processed table (~600 MB from figshare 20029387) to unlock Bucket-C (independent biological validation). Would let us move from `PHASE2_VALID_REWARD_FIT_NEEDS_SEED_ESCALATION` to `PHASE2_VALID_WITH_HELDOUT_SUPPORT_NEEDS_SEED_ESCALATION`.
+
+**Recommended next action — tertiary (deferred):** strict-start-pool retrain (train-gene-only start pool, 85 041 cells) is a future enhancement, NOT a Phase 2b blocker.
+
+**Ideal alternative (consolidated):** 4-seed escalation + Replogle Bucket-C scoring in the same ~1-hour session, then proceed to Phase 3.
+
+**Sacred-rule conformance:**
+* `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean.
+* No Phase 2 PPO checkpoints, eval summaries, or interpretation files modified.
+* All Phase 2b outputs under `artifacts_v3/eval_v3b_phase2b/` and `artifacts_v3/interpretation/`.
+* No code edits in this session.
+
+**Committed (proposed):**
+* `artifacts_v3/eval_v3b_phase2b/source_usage_table.md`
+* `artifacts_v3/eval_v3b_phase2b/leakage_safe_summary.csv` (28 rows × 14 cols)
+* `artifacts_v3/eval_v3b_phase2b/leakage_safe_deltas.csv` (4 rows × 5 cols)
+* `artifacts_v3/eval_v3b_phase2b/phase2b_verdict.json`
+* `artifacts_v3/interpretation/v3b_phase2b_leakage_split_audit.md`
+* PROGRESS.md (this entry)
+
+**Artifacts unchanged from Phase 2:**
+* `artifacts_v3/rl_v3b_safety_aware_v2primary_seed42/` (PPO_C real)
+* `artifacts_v3/rl_v3b_safety_aware_v2primary_seed42_permuted_chronos/` (PPO_C null)
+* `artifacts_v3/eval_v3b_phase2/` (all Phase 2 eval outputs)
+* `artifacts_v3/interpretation/v3b_phase2_interpretation.md` (Phase 2 interpretation — not amended; this audit is appended, not retroactive)
+
+**Blockers:** none. Phase 3 is **NOT** recommended until the 4-seed escalation lands.
+
+**Next session:** 4-seed escalation of PPO_C (real + permuted), seeds {42, 0, 1, 7}. Then re-evaluate at all 4 hardness cells. Then decide Phase 3 / Phase 4 / revise based on the 4-seed CI.
+
+---
+
 ## Session 2026-05-17-2200  (agent: research-lead, V3B)
 
 **Phase:** V3B Phase 2 — Safety-aware PPO_C retrain (Variant C of plan §4) + 5-rule acceptance

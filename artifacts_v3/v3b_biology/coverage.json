@@ -1,0 +1,51 @@
+{
+  "generated_at_utc": "2026-05-18T23:06:35.442473+00:00",
+  "sources": {
+    "gene_vocab": "/Users/regina/Desktop/cellpath/artifacts/vae/gene_vocab.json",
+    "chronos_parquet": "/Users/regina/Desktop/cellpath/data/processed/depmap_k562_chronos.parquet",
+    "horlbeck_source": null
+  },
+  "gene_safety": {
+    "n_total_genes": 105,
+    "n_with_chronos": 99,
+    "fraction_with_chronos": 0.9429,
+    "n_essential_chronos_lt_minus_0_5": 5,
+    "essential_genes": [
+      "CBFA2T3",
+      "HK2",
+      "PLK4",
+      "PTPN1",
+      "STIL"
+    ],
+    "missing_chronos_genes": [
+      "C19orf26",
+      "C3orf72",
+      "ELMSAN1",
+      "KIAA1804",
+      "MAP4K5",
+      "SAMD1"
+    ],
+    "chronos_stats_on_105": {
+      "mean": -0.11202367601248929,
+      "median": -0.06775925399112384,
+      "min": -1.1859325037988147,
+      "max": 0.3275116165680632,
+      "p25": -0.214327968911323,
+      "p75": 0.02435201706396637
+    },
+    "essentiality_threshold": -0.5,
+    "tox_raw_definition": "max(0, -chronos - 0.5)",
+    "tox_norm_definition": "min(1.0, tox_raw)",
+    "honesty_caveat": "DepMap Chronos is CRISPR-Cas9 knockout. Norman 2019 is CRISPRa. Treat Chronos as a prior on K562 experimental disturbance, not as direct CRISPRa toxicity. See V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md \u00a73.5."
+  },
+  "k562_sl_pairs": {
+    "source_path": null,
+    "source_exists": false,
+    "format_used": null,
+    "n_raw_sl_pairs_loaded": 0,
+    "n_pairs_after_105_intersection": 0,
+    "fraction_genes_with_at_least_one_sl_pair": 0.0,
+    "honesty_caveat": "Horlbeck 2018 K562 SL pairs are cell-line-specific (only ~82 of 1,523 K562 pairs overlap Jurkat). Pairs are CRISPRi (knockdown); interpretation under CRISPRa (activation) requires biological judgement. See V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md \u00a73.5.",
+    "gap_reason": "no horlbeck_source argument"
+  }
+}

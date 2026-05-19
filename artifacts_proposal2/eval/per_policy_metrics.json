@@ -1,0 +1,50 @@
+{
+  "ppo_C": {
+    "n_episodes": 300,
+    "success_rate": 1.0,
+    "mean_n_steps": 1.0166666666666666,
+    "mean_path_tox_env": 0.0,
+    "mean_ce_count_env": 0.0,
+    "n_episodes_with_picks": 300,
+    "frac_zero_CE_picks": 1.0,
+    "mean_CE_picks_per_episode": 0.0,
+    "wmean_chronos_picks": -0.10581093323727449,
+    "mean_path_tox_picks": 0.0
+  },
+  "ppo_C_permuted": {
+    "n_episodes": 300,
+    "success_rate": 1.0,
+    "mean_n_steps": 1.0033333333333334,
+    "mean_path_tox_env": 0.019700796455144883,
+    "mean_ce_count_env": 0.16,
+    "n_episodes_with_picks": 300,
+    "frac_zero_CE_picks": 0.84,
+    "mean_CE_picks_per_episode": 0.16,
+    "wmean_chronos_picks": -0.1100554749990503,
+    "mean_path_tox_picks": 0.019700796455144883
+  },
+  "random_uniform_valid": {
+    "n_episodes": 300,
+    "success_rate": 0.9933333333333333,
+    "mean_n_steps": 1.1366666666666667,
+    "mean_path_tox_env": 0.01119328809902072,
+    "mean_ce_count_env": 0.04,
+    "n_episodes_with_picks": 300,
+    "frac_zero_CE_picks": 0.96,
+    "mean_CE_picks_per_episode": 0.04,
+    "wmean_chronos_picks": -0.09359266324311546,
+    "mean_path_tox_picks": 0.01119328809902072
+  },
+  "always_noop": {
+    "n_episodes": 300,
+    "success_rate": 0.42333333333333334,
+    "mean_n_steps": 1.0,
+    "mean_path_tox_env": 0.0,
+    "mean_ce_count_env": 0.0,
+    "n_episodes_with_picks": 0,
+    "frac_zero_CE_picks": null,
+    "mean_CE_picks_per_episode": 0.0,
+    "wmean_chronos_picks": 0.0,
+    "mean_path_tox_picks": 0.0
+  }
+}

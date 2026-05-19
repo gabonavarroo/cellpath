@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-05-19T01:53:27+00:00",
+  "git_commit": "b57d0511cdd13d27771b069bf3fa2e71f32ebcd4",
+  "seed": 42,
+  "epsilon_value": 3.1662898064,
+  "epsilon_source": "override(3.16629)",
+  "epsilon_percentile_json": 90.0,
+  "min_start_distance": 4.0,
+  "max_steps": 3,
+  "vae_n_latent": 32,
+  "vae_dir": "/Users/regina/Desktop/cellpath/artifacts/vae",
+  "dynamics_checkpoint": "artifacts_proposal1/dynamics_v1ot_ror/model.pt",
+  "dynamics_checkpoint_sha256": "9b404dcda3036adf43a41920faca1fc20636f4b7e598c41a3498b4b37c6cc088",
+  "dynamics_gate_passed": false,
+  "dynamics_gate_overridden": true,
+  "dynamics_arch": {
+    "use_state_linear_skip": false,
+    "use_gene_delta_bias": false,
+    "n_latent": 32,
+    "n_hidden": 256,
+    "n_layers": 3,
+    "d_emb": 64
+  },
+  "ppo_hparams": {
+    "total_timesteps": 1000000,
+    "n_steps": 1024,
+    "batch_size": 256,
+    "n_epochs": 10,
+    "lr": 0.0003,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": 0.2,
+    "clip_range_vf": null,
+    "ent_coef": 0.01,
+    "vf_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "target_kl": null,
+    "use_sde": false,
+    "policy": "MlpPolicy",
+    "policy_kwargs": {
+      "net_arch": [
+        128,
+        128
+      ],
+      "activation_fn": "tanh"
+    }
+  },
+  "reward_hparams": {
+    "lambda_sparse": 0.05,
+    "lambda_unc": 0.0,
+    "success_bonus": 0.0,
+    "failure_penalty": 0.0,
+    "distance_scale": 1.0,
+    "intermediate_shaping": true,
+    "mode": "safety_aware",
+    "beta_step_cost": 0.05,
+    "hybrid_alpha": 1.0,
+    "hybrid_terminal_bonus": 1.0,
+    "lambda_tox": 0.1,
+    "lambda_ce": 0.05,
+    "safety_table_path": "artifacts_v3/v3b_biology/gene_safety.parquet",
+    "permute_chronos": true,
+    "permute_chronos_seed": 42
+  },
+  "reward_mode": "absolute_distance",
+  "deterministic_eval": false,
+  "n_episodes": 500,
+  "policy_path": "artifacts_proposal2/rl_v3b_safety_aware_seed42_permuted_chronos/ppo.zip",
+  "notes": null,
+  "stage": "train_ppo",
+  "training_total_timesteps": 1000000,
+  "training_elapsed_sec": 600.8401708602905,
+  "final_eval_metrics": {
+    "success_rate": 1.0,
+    "mean_steps": 1.33,
+    "mean_reward": 0.9334999999999999
+  }
+}

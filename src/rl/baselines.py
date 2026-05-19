@@ -224,6 +224,12 @@ class GreedyDynamicsBeamPolicy:
         safety_essential_per_action: np.ndarray | None = None,
         lambda_tox: float = 0.0,
         lambda_ce: float = 0.0,
+        freeband_schedule: dict[str, Any] | None = None,
+        success_epsilon: float | None = None,
+        lambda_unc_path: float = 0.0,
+        uncertainty_reduce: str = "mean_sigma",
+        uncertainty_clip_min: float = -5.0,
+        uncertainty_clip_max: float = 3.0,
     ) -> None:
         if depth < 1:
             raise ValueError(f"depth must be ≥ 1, got {depth}")
@@ -264,21 +270,73 @@ class GreedyDynamicsBeamPolicy:
             self.safety_tox_per_action is not None
             and (self.lambda_tox > 0.0 or self.lambda_ce > 0.0)
         )
-        suffix = "_safety" if self._safety_active else ""
+        # V3B Phase 3: reward-aware freeband. When provided, the beam scores plans by
+        #   freeband_path_penalty(T) - success_bonus · 1[d_final < ε] + d_final
+        # rather than pure distance, so the planner is fair under the freeband reward.
+        # See path_length_freeband_reward() docstring for schedule details.
+        self.freeband_schedule = (
+            dict(freeband_schedule) if freeband_schedule is not None else None
+        )
+        self.success_epsilon = float(success_epsilon) if success_epsilon is not None else None
+        self._freeband_active = (
+            self.freeband_schedule is not None and self.success_epsilon is not None
+        )
+        if self.freeband_schedule is not None and self.success_epsilon is None:
+            raise ValueError(
+                "freeband_schedule provided without success_epsilon — both are required "
+                "for reward-aware greedy beam scoring."
+            )
+
+        # V3B Phase 4 uncertainty-aware scoring: per-plan accumulated max(unc_step)
+        # added to the beam objective. Behavior when lambda_unc_path=0 is identical
+        # to safety+freeband (or V2 distance-only when those are also off).
+        self.lambda_unc_path = float(lambda_unc_path)
+        self.uncertainty_reduce = str(uncertainty_reduce)
+        self.uncertainty_clip_min = float(uncertainty_clip_min)
+        self.uncertainty_clip_max = float(uncertainty_clip_max)
+        self._unc_active = bool(self.lambda_unc_path > 0.0)
+
+        suffix_parts = []
+        if self._safety_active:
+            suffix_parts.append("safety")
+        if self._freeband_active:
+            suffix_parts.append("freeband")
+        if self._unc_active:
+            suffix_parts.append("unc")
+        suffix = ("_" + "_".join(suffix_parts)) if suffix_parts else ""
         self.name = f"greedy_dyn_{self.depth}{suffix}"
 
-    def _expand(self, z_batch: np.ndarray, gene_actions: np.ndarray) -> np.ndarray:
-        """One batched dynamics call expanding (B, n_latent) by all genes in (B,)."""
+    def _expand(
+        self, z_batch: np.ndarray, gene_actions: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """One batched dynamics call. Returns (z_next, log_var_or_None).
+
+        log_var is returned (shape (B, n_latent)) when ``self._unc_active`` is True
+        AND the dynamics emits a 3-tuple (z_next, mu, log_var). Otherwise None.
+        """
         import torch
         with torch.no_grad():
             out = self.dynamics(
                 torch.from_numpy(z_batch).float(),
                 torch.from_numpy(gene_actions.astype(np.int64) + 1).long(),
             )
-        z_next = out[0] if isinstance(out, tuple) else out
+        if isinstance(out, tuple) and len(out) >= 1:
+            z_next = out[0]
+            log_var = out[2] if (self._unc_active and len(out) >= 3) else None
+        else:
+            z_next = out
+            log_var = None
         if isinstance(z_next, torch.Tensor):
-            return z_next.detach().cpu().numpy().astype(np.float32)
-        return np.asarray(z_next, dtype=np.float32)
+            z_arr = z_next.detach().cpu().numpy().astype(np.float32)
+        else:
+            z_arr = np.asarray(z_next, dtype=np.float32)
+        if log_var is not None and isinstance(log_var, torch.Tensor):
+            lv_arr: np.ndarray | None = log_var.detach().cpu().numpy()
+        elif log_var is not None:
+            lv_arr = np.asarray(log_var)
+        else:
+            lv_arr = None
+        return z_arr, lv_arr
 
     def _action_safety_cost(self, gene_action_idx: int) -> tuple[float, int]:
         """Per-action safety contributions: ``(tox_raw(g), is_essential(g))``."""
@@ -309,64 +367,134 @@ class GreedyDynamicsBeamPolicy:
         path_tox0 = float(info.get("tox_path", 0.0)) if self._safety_active else 0.0
         path_ce0 = int(info.get("common_essential_count", 0)) if self._safety_active else 0
 
-        def _score(dist: float, plan_tox: float, plan_ce: int) -> float:
-            return dist + self.lambda_tox * plan_tox + self.lambda_ce * plan_ce
+        def _freeband_penalty(T: int) -> float:
+            if self.freeband_schedule is None:
+                return 0.0
+            fs = int(self.freeband_schedule.get("free_steps", 3))
+            mu = int(self.freeband_schedule.get("mild_until", 5))
+            mb = float(self.freeband_schedule.get("mild_beta", 0.02))
+            hb = float(self.freeband_schedule.get("heavy_beta", 0.10))
+            T = int(T)
+            if T <= fs:
+                return 0.0
+            if T <= mu:
+                return mb * float(T - fs)
+            return mb * float(mu - fs) + hb * float(T - mu)
+
+        def _score(
+            dist: float, plan_tox: float, plan_ce: int,
+            T: int = 0, plan_max_unc: float = 0.0,
+        ) -> float:
+            """Composite beam score. Lower is better.
+
+            ``base = dist + λ_tox·plan_tox + λ_ce·plan_ce``      (V2 distance + Phase 2 safety)
+            ``+= freeband_penalty(T) − success_bonus·1[d<ε]``    (Phase 3 path-length)
+            ``+= λ_unc·plan_max_unc``                            (Phase 4 D)
+
+            When all extras default to 0 (no safety, no freeband, no uncertainty) the
+            score collapses to plain ``dist`` and behaviour matches V2 distance-only greedy.
+            """
+            base = dist + self.lambda_tox * plan_tox + self.lambda_ce * plan_ce
+            if self._freeband_active:
+                success_bonus = float(self.freeband_schedule.get("success_bonus", 1.0))  # type: ignore[union-attr]
+                penalty = _freeband_penalty(T)
+                success = 1.0 if dist < self.success_epsilon else 0.0  # type: ignore[operator]
+                base += penalty - success_bonus * success
+            if self._unc_active:
+                base += self.lambda_unc_path * float(plan_max_unc)
+            return base
 
         # Best plan tracking: (best_score, first_action). NOOP branch = "stay here".
+        # Under freeband, NOOP at the current step uses the *current* path length T_now
+        # (NOOP itself doesn't add a step). The env passes step_idx as info["step"]; if
+        # missing (V2 callers), fall back to 0 (start of episode).
+        T_now = int(info.get("step", 0)) if isinstance(info, dict) else 0
+        unc_max0 = float(info.get("unc_path_max", 0.0)) if (self._unc_active and isinstance(info, dict)) else 0.0
         best_first_action: int = self.noop_idx
         best_score: float = float("inf")
         if noop_available:
             d_here = float(np.linalg.norm(z - self.z_ref))
-            best_score = _score(d_here, path_tox0, path_ce0)
+            best_score = _score(d_here, path_tox0, path_ce0, T=T_now, plan_max_unc=unc_max0)
             best_first_action = self.noop_idx
 
         if len(env_avail_genes) == 0:
             return best_first_action
 
-        # Beam entries: (z_current, first_action_taken, used_set, plan_tox_added, plan_ce_added).
-        beam: list[tuple[np.ndarray, int | None, frozenset[int], float, int]] = [
-            (z, None, frozenset(), 0.0, 0)
+        # Beam entries: (z_current, first_action, used_set, plan_tox, plan_ce, plan_max_unc).
+        beam: list[tuple[np.ndarray, int | None, frozenset[int], float, int, float]] = [
+            (z, None, frozenset(), 0.0, 0, 0.0)
         ]
 
         for _step in range(self.depth):
-            new_candidates: list[tuple[np.ndarray, int | None, frozenset[int], float, int]] = []
+            depth_now = _step + 1
+            T_total = T_now + depth_now
+            new_candidates: list[
+                tuple[np.ndarray, int | None, frozenset[int], float, int, float]
+            ] = []
             batch_z: list[np.ndarray] = []
             batch_gene: list[int] = []
-            batch_meta: list[tuple[int | None, frozenset[int], int, float, int]] = []
-            for z_cur, first_action, used, plan_tox, plan_ce in beam:
+            batch_meta: list[tuple[int | None, frozenset[int], int, float, int, float]] = []
+            for z_cur, first_action, used, plan_tox, plan_ce, plan_max_unc in beam:
                 remaining = [int(g) for g in env_avail_genes if int(g) not in used]
                 for g in remaining:
                     batch_z.append(z_cur)
                     batch_gene.append(g)
-                    batch_meta.append((first_action, used, g, plan_tox, plan_ce))
+                    batch_meta.append((first_action, used, g, plan_tox, plan_ce, plan_max_unc))
 
             if not batch_z:
                 break
 
             z_arr = np.stack(batch_z, axis=0)
             g_arr = np.asarray(batch_gene, dtype=np.int64)
-            z_next_arr = self._expand(z_arr, g_arr)
+            z_next_arr, log_var_arr = self._expand(z_arr, g_arr)
             dists = np.linalg.norm(z_next_arr - self.z_ref[None, :], axis=1)
 
-            for ((first_action, used, g, plan_tox, plan_ce), zn, d) in zip(
-                batch_meta, z_next_arr, dists, strict=True
+            # Per-step uncertainty scalar (one per batch element) when D is active.
+            if self._unc_active and log_var_arr is not None:
+                from src.rl.biology_rewards import per_step_uncertainty_scalar
+                unc_steps = np.asarray([
+                    per_step_uncertainty_scalar(
+                        lv,
+                        clip_min=self.uncertainty_clip_min,
+                        clip_max=self.uncertainty_clip_max,
+                        reduce=self.uncertainty_reduce,
+                    ) for lv in log_var_arr
+                ], dtype=np.float64)
+            else:
+                unc_steps = np.zeros(len(batch_meta), dtype=np.float64)
+
+            for ((first_action, used, g, plan_tox, plan_ce, plan_max_unc), zn, d, u_step) in zip(
+                batch_meta, z_next_arr, dists, unc_steps, strict=True
             ):
                 fa = g if first_action is None else first_action
                 tox_g, ce_g = self._action_safety_cost(g)
                 new_plan_tox = plan_tox + tox_g
                 new_plan_ce = plan_ce + ce_g
-                new_candidates.append((zn, fa, used | {g}, new_plan_tox, new_plan_ce))
+                new_plan_max_unc = max(plan_max_unc, float(u_step))
+                new_candidates.append(
+                    (zn, fa, used | {g}, new_plan_tox, new_plan_ce, new_plan_max_unc)
+                )
 
-                score = _score(float(d), path_tox0 + new_plan_tox, path_ce0 + new_plan_ce)
+                score = _score(
+                    float(d),
+                    path_tox0 + new_plan_tox,
+                    path_ce0 + new_plan_ce,
+                    T=T_total,
+                    plan_max_unc=max(unc_max0, new_plan_max_unc),
+                )
                 if score < best_score:
                     best_score = score
                     best_first_action = int(fa)  # type: ignore[arg-type]
 
-            # Beam pruning is by the safety-augmented score so that the search front
-            # is consistent with the global objective. When λ=0 the score reduces to
-            # `dist` and behavior matches the V2 greedy.
+            # Beam pruning uses the same composite score.
             new_candidates.sort(key=lambda x: (
-                _score(float(np.linalg.norm(x[0] - self.z_ref)), path_tox0 + x[3], path_ce0 + x[4]),
+                _score(
+                    float(np.linalg.norm(x[0] - self.z_ref)),
+                    path_tox0 + x[3],
+                    path_ce0 + x[4],
+                    T=T_total,
+                    plan_max_unc=max(unc_max0, x[5]),
+                ),
                 x[1] if x[1] is not None else -1,
             ))
             beam = new_candidates[: self.beam_width]

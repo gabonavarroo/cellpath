@@ -55,6 +55,13 @@ def compute_reward(
     common_essential_count: int = 0,
     lambda_tox: float = 0.10,
     lambda_ce: float = 0.05,
+    free_steps: int = 3,
+    mild_until: int = 5,
+    mild_beta: float = 0.02,
+    heavy_beta: float = 0.10,
+    freeband_success_bonus: float = 1.0,
+    unc_path_max: float = 0.0,
+    lambda_unc_path: float = 0.05,
 ) -> float:
     """Scalar reward for one transition.
 
@@ -139,6 +146,79 @@ def compute_reward(
         reward = float(hybrid_alpha) * float(distance_scale) * (float(prev_distance) - d_next)
         if (terminated or truncated) and is_success:
             reward += float(hybrid_terminal_bonus)
+    elif reward_mode == "path_length_freeband":
+        # V3B Phase 3 Variant B — global, nonlinear path-length penalty + terminal success.
+        # No biology / no uncertainty / no per-step shaping. Mid-episode reward is 0.
+        from src.rl.biology_rewards import path_length_freeband_reward
+        reward = path_length_freeband_reward(
+            is_success=is_success,
+            terminated=terminated,
+            truncated=truncated,
+            step_idx=step_idx,
+            free_steps=free_steps,
+            mild_until=mild_until,
+            mild_beta=mild_beta,
+            heavy_beta=heavy_beta,
+            success_bonus=freeband_success_bonus,
+        )
+        # Variant B is intentionally global/terminal — DO NOT additionally apply
+        # lambda_sparse / lambda_unc / success_bonus / failure_penalty. Return early.
+        return float(reward)
+    elif reward_mode == "uncertainty_aware":
+        # V3B Phase 4 Variant D — terminal success + step cost + path-max uncertainty.
+        from src.rl.biology_rewards import uncertainty_aware_reward
+        reward = uncertainty_aware_reward(
+            is_success=is_success,
+            terminated=terminated,
+            truncated=truncated,
+            step_idx=step_idx,
+            unc_path_max=unc_path_max,
+            beta_step_cost=beta_step_cost,
+            lambda_unc=lambda_unc_path,
+            success_bonus=freeband_success_bonus,
+        )
+        return float(reward)
+    elif reward_mode == "safety_path_freeband":
+        # V3B Phase 4 Variant B+C — freeband path-length + safety prior.
+        from src.rl.biology_rewards import safety_path_freeband_reward
+        reward = safety_path_freeband_reward(
+            is_success=is_success,
+            terminated=terminated,
+            truncated=truncated,
+            step_idx=step_idx,
+            tox_path=tox_path,
+            common_essential_count=common_essential_count,
+            free_steps=free_steps,
+            mild_until=mild_until,
+            mild_beta=mild_beta,
+            heavy_beta=heavy_beta,
+            lambda_tox=lambda_tox,
+            lambda_ce=lambda_ce,
+            success_bonus=freeband_success_bonus,
+        )
+        return float(reward)
+    elif reward_mode == "biorealistic_fused" or reward_mode == "multi_objective":
+        # V3B Phase 4 Variant B+C+D — full biorealistic fused reward. The SL term
+        # (Variant E) is structurally inactive on the Norman 105 action universe.
+        from src.rl.biology_rewards import biorealistic_fused_reward
+        reward = biorealistic_fused_reward(
+            is_success=is_success,
+            terminated=terminated,
+            truncated=truncated,
+            step_idx=step_idx,
+            tox_path=tox_path,
+            common_essential_count=common_essential_count,
+            unc_path_max=unc_path_max,
+            free_steps=free_steps,
+            mild_until=mild_until,
+            mild_beta=mild_beta,
+            heavy_beta=heavy_beta,
+            lambda_tox=lambda_tox,
+            lambda_ce=lambda_ce,
+            lambda_unc=lambda_unc_path,
+            success_bonus=freeband_success_bonus,
+        )
+        return float(reward)
     elif reward_mode == "safety_aware":
         # V3B Phase 2 Variant C — terminal_only_step_cost + path-cumulative safety penalty.
         # Mid-episode reward = 0; the env passes tox_path / common_essential_count at terminal.
@@ -164,7 +244,9 @@ def compute_reward(
         raise ValueError(
             f"Unknown reward_mode {reward_mode!r}. Choose from "
             "{'absolute_distance', 'delta_distance', 'terminal_only_step_cost', "
-            "'hybrid_delta_terminal', 'safety_aware'}."
+            "'hybrid_delta_terminal', 'safety_aware', 'path_length_freeband', "
+            "'safety_path_freeband', 'uncertainty_aware', 'biorealistic_fused', "
+            "'multi_objective'}."
         )
 
     # --- 2. Sparsity penalty (gene actions only, D7) ----------------------

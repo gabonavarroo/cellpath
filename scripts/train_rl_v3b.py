@@ -34,50 +34,86 @@ LOG = logging.getLogger("train_rl_v3b")
 
 
 def build_overrides(args: argparse.Namespace, repo_root: Path) -> list[str]:
-    """Construct Hydra override list for the V3B safety-aware retrain."""
-    safety_path = repo_root / "artifacts_v3/v3b_biology/gene_safety.parquet"
-    if not safety_path.exists():
-        raise FileNotFoundError(
-            f"V3B biology layer not built: {safety_path}. "
-            f"Run scripts/build_v3b_biology_layer.py first."
-        )
+    """Construct Hydra override list for V3B retrains.
 
-    # Naming convention (post-Phase 2c, 2026-05-18): rl_v3b_safety_aware_seed<N>[_permuted_chronos].
-    # Phase 2 used the rl_v3b_safety_aware_v2primary_seed{N} format; those dirs are symlinked
-    # to the new naming so all 4 seeds share a consistent path template for downstream aggregation.
-    permute_tag = "_permuted_chronos" if args.permute_chronos else ""
-    rl_dir = (
-        f"artifacts_v3/rl_v3b_safety_aware_seed{args.seed}{permute_tag}"
-    )
+    Modes:
+    * ``safety_aware`` — Variant C (Phase 2): toxicity + common-essential penalty.
+    * ``path_length_freeband`` — Variant B (Phase 3): nonlinear path-length penalty,
+      no biology, default env.max_steps=8 to enable longer-horizon exploration.
+    """
+    overrides: list[str] = []
 
-    overrides: list[str] = [
-        # Reward switch
-        "rl.reward.mode=safety_aware",
-        f"rl.reward.lambda_tox={args.lambda_tox}",
-        f"rl.reward.lambda_ce={args.lambda_ce}",
-        f"rl.reward.safety_table_path={safety_path}",
-        f"rl.reward.permute_chronos={'true' if args.permute_chronos else 'false'}",
-        f"rl.reward.permute_chronos_seed={args.seed}",
-        # Output path
+    if args.mode == "safety_aware":
+        safety_path = repo_root / "artifacts_v3/v3b_biology/gene_safety.parquet"
+        if not safety_path.exists():
+            raise FileNotFoundError(
+                f"V3B biology layer not built: {safety_path}. "
+                f"Run scripts/build_v3b_biology_layer.py first."
+            )
+        permute_tag = "_permuted_chronos" if args.permute_chronos else ""
+        rl_dir = f"artifacts_v3/rl_v3b_safety_aware_seed{args.seed}{permute_tag}"
+        overrides += [
+            "rl.reward.mode=safety_aware",
+            f"rl.reward.lambda_tox={args.lambda_tox}",
+            f"rl.reward.lambda_ce={args.lambda_ce}",
+            f"rl.reward.safety_table_path={safety_path}",
+            f"rl.reward.permute_chronos={'true' if args.permute_chronos else 'false'}",
+            f"rl.reward.permute_chronos_seed={args.seed}",
+        ]
+    elif args.mode == "path_length_freeband":
+        # Variant B — no biology dependency; defaults extend horizon to 8 to allow K=4,5
+        # exploration. Free band defaults match config/rl.yaml::reward.freeband.
+        rl_dir = f"artifacts_v3/rl_v3b_path_freeband_seed{args.seed}"
+        overrides += [
+            "rl.reward.mode=path_length_freeband",
+            f"rl.reward.freeband.free_steps={args.free_steps}",
+            f"rl.reward.freeband.mild_until={args.mild_until}",
+            f"rl.reward.freeband.mild_beta={args.mild_beta}",
+            f"rl.reward.freeband.heavy_beta={args.heavy_beta}",
+            f"rl.reward.freeband.success_bonus={args.success_bonus}",
+            f"rl.env.max_steps={args.max_steps}",
+        ]
+    else:
+        raise ValueError(f"Unknown V3B mode: {args.mode}")
+
+    overrides += [
         f"paths.rl_dir={rl_dir}",
-        # Seed
         f"seed={args.seed}",
     ]
     if args.total_timesteps is not None:
         overrides.append(f"rl.ppo.total_timesteps={int(args.total_timesteps)}")
-
     return overrides
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--mode", choices=("safety_aware", "path_length_freeband"),
+        default="safety_aware",
+        help="V3B reward variant. safety_aware = Phase 2 Variant C; "
+             "path_length_freeband = Phase 3 Variant B.",
+    )
+    # Variant C (safety) knobs
     parser.add_argument("--lambda_tox", type=float, default=0.10,
                         help="V3B Variant C λ_tox (default per plan §4).")
     parser.add_argument("--lambda_ce", type=float, default=0.05,
                         help="V3B Variant C λ_ce (default per plan §4).")
     parser.add_argument("--permute_chronos", action="store_true",
                         help="Null control: randomly permute Chronos labels.")
+    # Variant B (freeband) knobs
+    parser.add_argument("--free_steps", type=int, default=3,
+                        help="V3B Variant B free-band upper bound (T ≤ free_steps pays 0 penalty).")
+    parser.add_argument("--mild_until", type=int, default=5,
+                        help="V3B Variant B mild-band upper bound.")
+    parser.add_argument("--mild_beta", type=float, default=0.02,
+                        help="V3B Variant B mild-band slope per step.")
+    parser.add_argument("--heavy_beta", type=float, default=0.10,
+                        help="V3B Variant B heavy-band slope per step.")
+    parser.add_argument("--success_bonus", type=float, default=1.0,
+                        help="V3B Variant B terminal success bonus.")
+    parser.add_argument("--max_steps", type=int, default=8,
+                        help="V3B Variant B env.max_steps (default 8 to allow K∈{4,5,8} exploration).")
     parser.add_argument("--total_timesteps", type=int, default=None,
                         help="Override rl.ppo.total_timesteps (default: V2 primary 1M).")
     parser.add_argument("--dry_run", action="store_true",

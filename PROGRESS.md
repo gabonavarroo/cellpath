@@ -6,6 +6,184 @@
 
 ---
 
+## Session 2026-05-19-0050  (agent: research-lead, V3B)
+
+**Phase:** V3B Phase 3b — Stricter-epsilon diagnostic (p15, p10, p5) — no retraining
+
+**Status:** Computed control-distance quantiles from V1 latents (p1/p5/p10/p15/p20/p25/p50); extended `scripts/evaluate_rl_v3b_phase3.py` with `--epsilon_value`, `--ppo_zip_C`, `--max_greedy_depth` (per-cell greedy depth cap for efficiency), and K=2 + p-agnostic cells; ran 3 epsilons × 4 seeds × 9 cells = ~108 invocations (876 summary.json files) on existing PPO_A / PPO_B (4 seeds, freeband) / PPO_C (4 seeds, safety-aware) / random / noop / reward-aware greedy_dyn_{1,2,3,5} (capped per cell K). No retraining. Total Phase 3b wall-clock ≈ 110 min sweep + ~10 min aggregation/writing.
+
+**Verdict: `PHASE3B_FIELD_REMAINS_SATURATED_AT_P10_RECOMMEND_REPRESENTATION_REFORMULATION`.** Decision Rule B met (greedy_dyn_5_B ≥ 0.95 everywhere at K≥4 even at p5 = 2.7362, 14% stricter than p25). Recommended ε for B+C retraining: **NONE**. **B+C on V2 dynamics is NOT unlocked.** **V2 primary 32D `RoR_corr010` dynamics should be abandoned for reward-space biorealistic work.**
+
+**Exact ε values** (from V1 control-distance distribution, n=11 855 cells):
+
+| Quantile | Value (L2) | Notes |
+| --- | ---: | --- |
+| p25 | 3.1663 | V2 reference |
+| **p15** | **2.9898** | Phase 3b test |
+| **p10** | **2.8846** | Phase 3b test |
+| **p5** | **2.7362** | Phase 3b additional (since p10 still saturated) |
+
+Bin 10-12 OOD: **0 cells** in start pool (empty; not testable). Diagnostic restricted to bins {6-8, 8-10}.
+
+**Diagnostic question answers:**
+1. greedy_dyn_1_B un-saturates at K=2 cells (p5: 0.547 / 0.130) and K=3 cells (p5: 0.970 / 0.940). **Not at K≥4** (always 1.000).
+2. Same pattern for greedy_dyn_2_B.
+3. **greedy_dyn_5_B never un-saturates** at any K≥5 cell at any tested ε (always 1.000).
+4. PPO_B's T∈{4,5} usage at K≥4 cells grows from 6% (p25) → 11.6% (p5) — modestly more long-path usage under stricter ε, but always below the 30% spec threshold.
+5. Random clearly lower at every cell (≥0.10 gap to PPO/greedy).
+6. **No reachable, non-saturated K≥4 cell exists** where PPO_B can be meaningfully compared to greedy_dyn_5_B. K=2/K=3 cells un-saturate but their budget is too short for the freeband K∈{4,5} band.
+7. ε-tightening **partially** makes the task harder — K=2 and K=3 cells become non-trivial. But the path-length leverage band (K≥4) stays saturated at every ε.
+
+**Best non-saturated cell with a clean spread:** K=2/bin 6-8/OOD at p15.
+
+| Policy | Raw success (4-seed mean ± std) |
+| --- | ---: |
+| greedy_dyn_1_B | 0.710 ± 0.000 |
+| greedy_dyn_2_B | 0.643 ± 0.000 |
+| ppo_C | 0.583 ± 0.036 |
+| ppo_A (V2 primary) | 0.577 ± 0.000 |
+| **ppo_B** | **0.556 ± 0.039** |
+| random | 0.037 ± 0.000 |
+| always_noop | 0.000 ± 0.000 |
+
+**Greedy_dyn_1_B (single-step lookahead) beats PPO_B by +0.15 raw success** at this cell. The cleanest evidence the dynamics field is single-step-contraction-dominated — a multi-step planner gains nothing structural; the freeband K∈{4,5} band is impossible to exploit because the K=2 budget doesn't allow it, and at K≥4 cells the depth-1 oracle already wins.
+
+**Decision rule outcomes** (per user spec):
+| Rule | Outcome |
+| --- | --- |
+| A. headroom at any K≥4 cell + PPO_B T∈{4,5} ≥15% | ❌ never met |
+| B. greedy_dyn_5_B ≥ 0.95 everywhere at p10 | ✅ binding (also at p5) |
+| C. all policies collapse at p10 | ❌ not met (most cells still solvable) |
+
+**Other relevant observations:**
+- **PPO_C regresses substantially under stricter ε**: K=3/bin 8-10/OOD success drops 0.940 (p25) → 0.886 (p10) → **0.775 (p5)**. PPO_B beats PPO_C by **+10.9 pp** at p5/K=3/bin 8-10/OOD (CI [+0.100, +0.119] ✅). Variant C is brittle to ε-tightening (its safety-prior sometimes prefers safer-but-longer paths that miss tighter ε); Variant B is robust.
+- **Real path-length leverage exists between depth-2 and depth-3 at K=3 cells under p10**: greedy_dyn_2 = 0.940 → greedy_dyn_3 = 1.000 (+6 pp). But this is K=3, not K≥4, so freeband's mild band (K=4,5) cannot exploit it. PPO_B at 0.915 acts like a depth-2 controller; doesn't pick up the +6 pp lift.
+- **Markov-composition hallucination risk did NOT materialize** under any ε — PPO_B used T>5 in 0% of episodes at every cell. Heavy_beta=0.10 correctly priced out speculative depths.
+- **Random scales linearly with K** at p5 (K=2: 0.013, K=8: 0.350), confirming the dynamics is structurally "navigable by accident" — contraction dominates over informational direction.
+
+**Retraining vs evaluation-only:** Evaluation-only is sufficient. The structural saturation is in the dynamics, not the reward; retraining PPO_B at stricter ε will not change the K≥4 verdict.
+
+**Whether V2 dynamics should be abandoned for reward-space work: YES.** Three consecutive phases (2c, 3, 3b) confirm the V2 primary 32D `RoR_corr010` field is fundamentally well-conditioned. Cumulative V3B contribution on this field is the Phase 2c Bucket-A safety constraint (Variant C as a known-good no-essential-pick policy). Path-length and combined-axis work should move to a different dynamics field (V3A Track N 64D NB once safety-pre-checked, or V3.3 ZINB / V3.4 SCANVI / V3.fallback.B contraction-regulariser).
+
+**Sacred-rule conformance:**
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean.
+- No PPO / dynamics / VAE retraining in Phase 3b. All policies reused from prior phases.
+- All new outputs under `artifacts_v3/eval_v3b_phase3b/` and `artifacts_v3/interpretation/v3b_phase3b_strict_epsilon_diagnostic.md`.
+- Test suite: **327 passed / 2 skipped**, no regressions.
+- Only code edits: `scripts/evaluate_rl_v3b_phase3.py` (additive: `--epsilon_value`, `--ppo_zip_C`, `--max_greedy_depth`, K=2 cells, p-agnostic cell aliases). Legacy p25-tagged cells preserved as aliases for back-compat.
+- New code: `scripts/aggregate_v3b_phase3b.py` (aggregator + decision rules A/B/C).
+
+**Committed (proposed):**
+- `scripts/evaluate_rl_v3b_phase3.py` (additive edits)
+- `scripts/aggregate_v3b_phase3b.py` (new)
+- `artifacts_v3/interpretation/v3b_phase3b_strict_epsilon_diagnostic.md` (new)
+- PROGRESS.md (this entry)
+
+**Artifacts (local, not committed):**
+- `artifacts_v3/eval_v3b_phase3b/{epsilon_quantiles.json, eps_p15/seed*/, eps_p10/seed*/, eps_p5/seed*/, epsilon_sweep_results.{csv,json}, epsilon_sweep_summary.md}` (876 summary.json + aggregate)
+
+**Blockers:** none.
+
+**Next (separate session, awaiting user approval):**
+1. **V3A Track N safety pre-check** (the V3A workflow §A1-bg-3+ that was paused): pairs build → RoR dynamics on Track N 64D NB → reachability oracle → greedy saturation check at p25. Cost: ~2 hours. If Track N's greedy_dyn_2 at K=3/primary < 0.95, run Phase 3-style path-length test there. If Track N also saturates, escalate to V3.3 ZINB / V3.4 SCANVI / V3.fallback.B per V3 stub §5.
+2. Halt reward-space work on V2 primary dynamics until a non-saturated representation is in place.
+
+---
+
+## Session 2026-05-18-2030  (agent: research-lead, V3B)
+
+**Phase:** V3B Phase 3 — Path-length free-band reward (Variant B) + 4-seed escalation
+
+**Status:** Implemented Variant B end-to-end: new `path_length_freeband_reward()` in `src/rl/biology_rewards.py`; new `path_length_freeband` mode dispatch in `src/rl/reward.py` (V2 modes byte-identical); freeband knobs (`free_steps`, `mild_until`, `mild_beta`, `heavy_beta`, `success_bonus`) plumbed through `src/rl/environment.py`; reward-aware extension of `GreedyDynamicsBeamPolicy` (scores plans by `path_penalty(T) − success_bonus·1[d<ε] + d` when `freeband_schedule` provided — backward-compatible: distance-only when not provided); freeband knobs added to `config/rl.yaml` (default `mode` unchanged). Schedule defaults: `free_steps=3, mild_until=5, mild_beta=0.02, heavy_beta=0.10, success_bonus=1.0`. Trained 4 PPO_B checkpoints (seeds {42, 0, 1, 7} × 1M timesteps × `env.max_steps=8` × V2 primary 32D `RoR_corr010` dynamics; ~3.3 min each = ~13 min total training). Evaluated all 4 seeds × 6-cell Phase 3 matrix (K ∈ {3, 4, 5, 8} × bin 8-10 OOD; K ∈ {4, 5} × bin 6-8 OOD) × n=300 episodes/cell. Greedy baselines: `greedy_dyn_{1,2,3,5,8}_B` (reward-aware under freeband). Total Phase 3 wall-clock: ~50 min.
+
+**Verdict: `PHASE3_FAIL_NO_PATH_LENGTH_LEVERAGE_DETECTED_FIELD_SATURATED`** (2/5 acceptance criteria pass).
+
+**Seed-42 smoke directional signal: NONE.** PPO_B at seed 42 success=1.000 at every K≥4 cell — but so did greedy_dyn_5_B, greedy_dyn_8_B, and even greedy_dyn_1_B. PPO_B used T∈{4,5} in only 6% of episodes. The 4-seed escalation confirmed deterministically (greedy baselines are deterministic; only PPO_B has stochastic variance, and it's small — `std ≤ 0.030` everywhere). Per user spec, escalation ran regardless of smoke signal for complete analysis.
+
+**4-seed Phase 3 acceptance criteria:**
+
+| # | Rule | Result | Passed |
+| --- | --- | --- | --- |
+| 1 | PPO_B − greedy_dyn_5_B raw success CI excludes 0 at any K≥4 cell | max Δ across K≥4 cells = **+0.0000** (perfect ties at 1.000 everywhere) | ❌ |
+| 2 | PPO_B uses T∈{4,5} in ≥30% of successful episodes at winning/test cell | max frac = **4.5%** at K=4/bin 8-10 OOD | ❌ |
+| 3 | always_noop success ≤ 0.05 at every cell | max = 0.000 | ✅ |
+| 4 | PPO_B − random raw success ≥ 0.10 at winning/test cell | +0.7233 at K=4/bin 8-10 OOD | ✅ |
+| 5 | Winning cell is not K=3 | no winning cell exists | ❌ |
+
+**Why Phase 3 failed — the field is saturated:**
+- Every K≥3 cell on V2 primary dynamics under reward-aware planning achieves 100% success across **every** greedy depth (1, 2, 3, 5, 8) and both PPOs.
+- Even `greedy_dyn_1_B` (single-step lookahead) achieves 100% at K=3/bin 8-10 OOD primary — the dynamics' single-step contraction toward `z_ref` is so strong at p25 ε that one well-chosen gene action usually lands within ε.
+- PPO_B respects the schedule (zero T>5 usage everywhere — no "mathematical hallucination" risk materialized) but **finds no leverage to exploit T∈{4,5}** because shorter plans already saturate.
+- The reward-aware greedy is a strictly stronger baseline than V2 distance-only greedy. With the freeband objective, the beam prefers shorter successful plans; for a saturated field, this means greedy commits to K=1–3 plans and matches PPO_B exactly.
+- The ONLY statistically-distinguished cell is K=3/bin 8-10/OOD where PPO_B **regresses** −4.5 pp vs PPO_A (PPO_B 0.955 ± 0.030 vs PPO_A 1.000) — a small cost of value-function retraining at the saturated cell.
+
+**Per-cell PPO_B raw success (4-seed mean ± std):**
+
+| Cell | ppo_B | ppo_A | greedy_dyn_5_B | random |
+| --- | ---: | ---: | ---: | ---: |
+| K=3/bin 8-10/OOD | 0.955 ± 0.030 | 1.000 | 1.000 | 0.170 |
+| K=4/bin 8-10/OOD | 1.000 ± 0.000 | 1.000 | 1.000 | 0.277 |
+| K=5/bin 8-10/OOD | 1.000 ± 0.000 | 1.000 | 1.000 | 0.417 |
+| K=8/bin 8-10/OOD | 1.000 ± 0.000 | 1.000 | 1.000 | 0.590 |
+| K=4/bin 6-8/OOD | 1.000 ± 0.000 | 1.000 | 1.000 | 0.383 |
+| K=5/bin 6-8/OOD | 1.000 ± 0.000 | 1.000 | 1.000 | 0.443 |
+
+**Best cell + K**: there is **no winning cell**. The strongest delta to greedy_dyn_5_B is +0.0000 (tied everywhere except K=3 where PPO_B regresses).
+
+**PPO_B path-length distribution among successful episodes** (4-seed mean):
+- K=3/bin 8-10/OOD: T=3 100%, T∈{4,5} 0%, T>5 0%
+- K=4 & K=5 & K=8 / bin 8-10/OOD: T=3 95.5%, T∈{4,5} 4.5%, T>5 0%
+- K=4 & K=5 / bin 6-8/OOD: T=3 99.4%, T∈{4,5} 0.6%, T>5 0%
+
+PPO_B respects the freeband schedule (zero "speculative" T>5 usage) but rarely needs the mild band.
+
+**Reward-aware greedy is implemented** (load-bearing for fair comparison per the user's Phase 2b "greedy must be reward-aware" lesson). Greedy oracles at depths 1–8 use `path_penalty(T) − success_bonus·1[d<ε] + d` for plan scoring; behavior collapses to V2 distance-only when freeband schedule is omitted (preserving V2 regressions).
+
+**Phase 5 (C+B conjunction) is NOT unlocked.** Combining a non-headline-winning Variant C with a non-headline-winning Variant B would not produce a defensible V3B headline.
+
+**Recommended next steps (ranked):**
+1. **Problem reformulation — tighter ε** (RECOMMENDED, primary). Set `ε = p10 ≈ 2.92` or `p15 ≈ 3.00`. Forces longer paths to reach the now-stricter success criterion; naturally activates the K=4,5 leverage band. Smallest decisive change: re-run Phase 3 eval at p10 ε. If greedy still saturates at p10, the field is fundamentally robust and reward shaping cannot break it. **Cost: ~30 min eval (no retraining needed initially)**.
+2. **Test on Track N 64D dynamics** (secondary). Track N completed in V3A; awaiting safety pre-check (V3A §A1-bg-3 onwards). If Track N 64D shows weaker contraction (greedy_dyn_2 < 0.95 at p25), Variant B may find leverage there. **Cost: ~2 h** (pairs build + RoR dynamics + reachability + greedy saturation check + Phase 3 eval).
+3. **Halt reward-space biorealistic control on V2 dynamics.** Honest finding: the V2 primary 32D `RoR_corr010` field is fundamentally well-conditioned; reward-space biorealistic controls (safety, path-length, uncertainty) do not produce a planning-advantage headline. Phase 2c's reward-fit safety result is V3B's contribution; further work should move to a different latent (Track N 64D or SCANVI 32D) where the field is not pre-saturated.
+
+**Explicitly NOT recommended:**
+- Phase 4 D (uncertainty-aware) on V2 dynamics alone — same saturation issue.
+- Phase 5 C+B combined — layering two non-headline-winning axes on a saturated field, inherits both failure modes.
+- λ tuning on B alone — the field, not the schedule, is the issue.
+
+**Sacred-rule conformance:**
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean (only pre-existing untracked entries).
+- No VAE / dynamics retraining; PPO_A reused as the frozen V2 baseline.
+- All new outputs under `artifacts_v3/`.
+- Test suite: **327 passed / 2 skipped**, no regressions (was 305 after Phase 2c → +22 freeband tests).
+
+**Committed (proposed):**
+- `src/rl/biology_rewards.py` (additive: path_length_freeband_reward)
+- `src/rl/reward.py` (additive: path_length_freeband mode dispatch)
+- `src/rl/environment.py` (additive: freeband knobs + plumbing)
+- `src/rl/baselines.py` (additive: reward-aware GreedyDynamicsBeamPolicy)
+- `config/rl.yaml` (additive: reward.freeband.* defaults)
+- `scripts/train_rl_v3b.py` (additive: --mode flag)
+- `scripts/evaluate_rl_v3b_phase3.py` (new)
+- `scripts/aggregate_v3b_phase3.py` (new)
+- `tests/test_freeband_reward.py` (new, 22 tests)
+- `artifacts_v3/interpretation/v3b_phase3_path_freeband.md` (new)
+- PROGRESS.md (this entry)
+
+**Artifacts (local, not committed):**
+- `artifacts_v3/rl_v3b_path_freeband_seed{42,0,1,7}/` (4 PPO_B checkpoints)
+- `artifacts_v3/eval_v3b_phase3/seed{42,0,1,7}/` (per-seed eval × 6 cells × 9 policies)
+- `artifacts_v3/eval_v3b_phase3/{phase3_results.{csv,json}, phase3_summary.md}`
+
+**Blockers:** none.
+
+**Next (separate session, awaiting user approval):**
+1. Tighter ε re-evaluation at p10 / p15 on the existing PPO_B + PPO_A + greedy oracles. Smallest decisive change; no retraining. If field still saturates, confirms the dynamics is the bottleneck.
+2. If (1) un-saturates greedy_dyn_2, retrain PPO_B at p10 ε and re-evaluate; this would be the true Phase 3 acceptance test.
+3. If (1) does NOT un-saturate, move to Track N 64D safety pre-check (V3A pending), then re-test Phase 3 reward on Track N.
+
+---
+
 ## Session 2026-05-18-1700  (agent: research-lead, V3B)
 
 **Phase:** V3B Phase 2c — 4-seed escalation of safety-aware PPO_C + Replogle held-out (Bucket-C)

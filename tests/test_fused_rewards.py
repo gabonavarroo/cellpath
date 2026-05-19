@@ -383,12 +383,16 @@ class TestGreedyUncertaintyAware:
         mask[1] = True  # gene action 1 (gene_idx=2, high unc)
         mask[n_genes] = True  # noop
 
-        # Strong λ_unc forces the policy to prefer action 0.
+        # Moderate λ_unc forces the policy to prefer action 0 (low unc gene) over action 1
+        # (high unc gene), without making noop look better than the lower-distance gene action.
+        # gene 0: dist ≈ 5, unc ≈ 1.0 → score = 5 + 0.5·1 = 5.5
+        # gene 1: dist ≈ 5, unc ≈ exp(1.5) ≈ 4.48 → score = 5 + 0.5·4.48 = 7.24
+        # noop:   dist = 10, unc = 0 → score = 10
         policy = GreedyDynamicsBeamPolicy(
             self._toy_dynamics(), n_genes=n_genes,
             z_ref=np.zeros(4, dtype=np.float32),
             noop_idx=n_genes, depth=1,
-            lambda_unc_path=100.0,
+            lambda_unc_path=0.5,
             uncertainty_reduce="mean_sigma",
         )
         a = policy.select_action(z, mask, {})

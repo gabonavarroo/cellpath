@@ -61,8 +61,6 @@ def build_overrides(args: argparse.Namespace, repo_root: Path) -> list[str]:
             f"rl.reward.permute_chronos_seed={args.seed}",
         ]
     elif args.mode == "path_length_freeband":
-        # Variant B — no biology dependency; defaults extend horizon to 8 to allow K=4,5
-        # exploration. Free band defaults match config/rl.yaml::reward.freeband.
         rl_dir = f"artifacts_v3/rl_v3b_path_freeband_seed{args.seed}"
         overrides += [
             "rl.reward.mode=path_length_freeband",
@@ -73,6 +71,36 @@ def build_overrides(args: argparse.Namespace, repo_root: Path) -> list[str]:
             f"rl.reward.freeband.success_bonus={args.success_bonus}",
             f"rl.env.max_steps={args.max_steps}",
         ]
+    elif args.mode in ("safety_path_freeband", "uncertainty_aware", "biorealistic_fused"):
+        # V3B Phase 4 — fused rewards. All write under artifacts_v3/rl_v3b_<mode>_eps<label>_seed<N>/.
+        safety_path = repo_root / "artifacts_v3/v3b_biology/gene_safety.parquet"
+        eps_tag = args.epsilon_label or "p25"
+        rl_dir = f"artifacts_v3/rl_v3b_{args.mode}_eps{eps_tag}_seed{args.seed}"
+        overrides += [
+            f"rl.reward.mode={args.mode}",
+            f"rl.reward.freeband.free_steps={args.free_steps}",
+            f"rl.reward.freeband.mild_until={args.mild_until}",
+            f"rl.reward.freeband.mild_beta={args.mild_beta}",
+            f"rl.reward.freeband.heavy_beta={args.heavy_beta}",
+            f"rl.reward.freeband.success_bonus={args.success_bonus}",
+            f"rl.env.max_steps={args.max_steps}",
+            f"rl.reward.lambda_unc_path={args.lambda_unc_path}",
+        ]
+        # Variants B+C and B+C+D need the safety table.
+        if args.mode in ("safety_path_freeband", "biorealistic_fused"):
+            if not safety_path.exists():
+                raise FileNotFoundError(
+                    f"V3B biology layer not built: {safety_path}. "
+                    f"Run scripts/build_v3b_biology_layer.py first."
+                )
+            overrides += [
+                f"rl.reward.lambda_tox={args.lambda_tox}",
+                f"rl.reward.lambda_ce={args.lambda_ce}",
+                f"rl.reward.safety_table_path={safety_path}",
+            ]
+        # Stricter epsilon overrides (Phase 4 calibrated).
+        if args.epsilon_value is not None:
+            overrides.append(f"rl.env.epsilon_override={args.epsilon_value}")
     else:
         raise ValueError(f"Unknown V3B mode: {args.mode}")
 
@@ -89,10 +117,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
-        "--mode", choices=("safety_aware", "path_length_freeband"),
+        "--mode",
+        choices=(
+            "safety_aware", "path_length_freeband",
+            "safety_path_freeband", "uncertainty_aware", "biorealistic_fused",
+        ),
         default="safety_aware",
-        help="V3B reward variant. safety_aware = Phase 2 Variant C; "
-             "path_length_freeband = Phase 3 Variant B.",
+        help=(
+            "V3B reward variant. Phase 2 Variant C = safety_aware; "
+            "Phase 3 Variant B = path_length_freeband; "
+            "Phase 4: B+C = safety_path_freeband, D = uncertainty_aware, "
+            "B+C+D = biorealistic_fused."
+        ),
     )
     # Variant C (safety) knobs
     parser.add_argument("--lambda_tox", type=float, default=0.10,
@@ -116,6 +152,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="V3B Variant B env.max_steps (default 8 to allow K∈{4,5,8} exploration).")
     parser.add_argument("--total_timesteps", type=int, default=None,
                         help="Override rl.ppo.total_timesteps (default: V2 primary 1M).")
+    # Phase 4 fused-mode knobs
+    parser.add_argument("--lambda_unc_path", type=float, default=0.05,
+                        help="V3B Variant D λ_unc_path (default per config/rl.yaml).")
+    parser.add_argument("--epsilon_value", type=float, default=None,
+                        help="Stricter ε override (e.g. p15=2.9898, p10=2.8846, p5=2.7362). "
+                             "If None, uses default from epsilon_success.json + config.")
+    parser.add_argument("--epsilon_label", type=str, default=None,
+                        help="Label for output dir naming (e.g. 'p15'). Defaults to 'p25'.")
     parser.add_argument("--dry_run", action="store_true",
                         help="Print the resolved command without executing.")
     parser.add_argument("--verbose", "-v", action="store_true")

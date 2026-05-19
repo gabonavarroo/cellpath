@@ -228,7 +228,7 @@ __marimo__/
 /logs/
 /outputs/
 /zlocal-plans/
-/artifacts_v2/  
+/artifacts_v2/
 !/artifacts_v2/*.md
 !/artifacts_v2/figures
 !/artifacts_v3/interpretations

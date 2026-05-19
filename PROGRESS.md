@@ -6,6 +6,113 @@
 
 ---
 
+## Session 2026-05-19-1711  (agent: cleanup, V3B Phase 4)
+
+**Phase:** V3B Phase 4 cleanup — documentation/consistency only.
+
+**Status:** V3B Phase 4 cleanup: corrected epsilon/test-count wording, clarified diagnostic vs improvement cells, added PPO_A_max8 future-control requirement.
+
+**Scope guard:** V3C was not started.
+
+---
+
+## Session 2026-05-19-1500  (agent: research-lead, V3B Phase 4 / Final)
+
+**Phase:** V3B Phase 4 — Reward-stack closure and controller-objective lock (NOT a positive-headline run).
+
+**Status:** Implemented and validated the full V3B biorealistic reward stack on V2 primary 32D `RoR_corr010` dynamics. 4-seed final eval at p15. Locked the design via `V3_CONTROLLER_OBJECTIVE_SPEC.md`.
+
+**Verdict: `LOCKED_DESIGN_TECHNICAL_ONLY`** — expected outcome per the Phase 4 brief.
+
+**Reward modes implemented (Phase 4):**
+- `uncertainty_aware` (D): `R_T = success_bonus·1[success] − β·t − λ_unc·unc_path_max`. Uses dynamics' heteroscedastic head; bounded scalar via `per_step_uncertainty_scalar(reduce="mean_sigma", clip ∈ [-5,3])`.
+- `safety_path_freeband` (B+C): freeband path-length + Chronos safety; no D.
+- `biorealistic_fused` (B+C+D): full stack; `multi_objective` alias.
+
+V2 modes byte-identical (`absolute_distance`, `delta_distance`, `terminal_only_step_cost`, `hybrid_delta_terminal`, `safety_aware`, `path_length_freeband`). 73 V2 reward+env tests still pass; +29 new fused tests = **356 passed / 2 skipped**.
+
+**Code changes:** `src/rl/biology_rewards.py` (+`per_step_uncertainty_scalar`, +3 reward helpers); `src/rl/reward.py` (+3 mode branches); `src/rl/environment.py` (+`unc_path_max/mean` accumulators); `src/rl/baselines.py::GreedyDynamicsBeamPolicy` (+uncertainty-aware scoring); `config/rl.yaml` (+`lambda_unc_path`, `uncertainty_reduce`, `uncertainty_clip_min/max`); `scripts/train_rl_v3b.py` (+3 modes in `--mode`); `scripts/evaluate_rl_v3b_phase4.py` (new — multi-PPO under fused env); `scripts/aggregate_v3b_phase4.py` (new — 4-seed aggregator + verdict). `tests/test_fused_rewards.py` (new, 29 tests).
+
+**Selected ε: p15 (2.9898)** — chosen during calibration because **p10 caused PPO_BCD to collapse to 0.000 raw success at K=2/bin 8-10/OOD** (severe failure mode that violates the user's "prefer p15 if p10 causes severe PPO collapse" rule). p15 preserves all PPOs ≥ 0.13 at every cell.
+
+**PPOs trained (this session):**
+- 6 smoke: 3 rewards × {p15, p10} × seed 42 × 500k steps (~12 min total).
+- 12 final: 3 rewards × seeds {42, 0, 1, 7} × 1M steps at p15 (~42 min total).
+- Total: 18 new PPO checkpoints under `artifacts_v3/rl_v3b_{safety_path_freeband, uncertainty_aware, biorealistic_fused}_eps{p15,p10}_seed*/`.
+- PPO_A, PPO_B (seeds 42/0/1/7), PPO_C (seeds 42/0/1/7) reused from prior phases.
+
+**4-seed escalation: yes**, on all three new reward variants.
+
+**Bucket B (reward-independent raw success), 4-seed mean ± std, at the key cells (n=300/cell):**
+
+| Cell | PPO_A | PPO_B | PPO_C | PPO_BC | PPO_D | PPO_BCD | greedy_2_F | random |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| K=2/bin 6-8/OOD | 0.577 | 0.556±0.039 | 0.583±0.036 | 0.544±0.018 | 0.580±0.027 | 0.545±0.018 | **0.643** | 0.037 |
+| **K=2/bin 8-10/OOD** | 0.057 | **0.148**±0.037 | 0.112±0.037 | 0.130±0.060 | **0.148**±0.037 | **0.148**±0.037 | 0.130 | 0.020 |
+| K=3/bin 6-8/OOD | 0.980 | 0.971±0.016 | 0.984±0.008 | 0.968±0.007 | 0.974±0.017 | 0.949±0.025 | 0.993 | 0.160 |
+| K=3/bin 8-10/OOD (primary) | 0.940 | 0.940 | 0.940 | 0.940 | 0.940 | 0.940 | **1.000** | 0.103 |
+| K=4,5,8 / bin 8-10 / OOD | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 | 0.25–0.52 |
+
+**Bucket A (reward-fit, PPO_BCD vs PPO_A at hard cells):**
+- `mean_tox_path`: PPO_BCD 0.000 vs PPO_A 0.000–0.001 (both clean).
+- `mean_common_essential_per_ep`: PPO_BCD 0.000 vs PPO_A 0.000–0.007.
+- **`mean_unc_path_max`: PPO_BCD 0.609–0.702 vs PPO_A 0.618–0.744** — modest but consistent reduction. Uncertainty axis being optimised.
+
+**Bucket C (held-out biological validation):** pending_no_local_source for this evaluation. The Phase 2c Replogle K562 essentials check is available and showed the DepMap-Chronos safety prior does NOT transfer to the Replogle held-out assay (Phase 2c verdict `HELDOUT_INCONCLUSIVE_NO_GENERALIZATION_DETECTED`). This is consistent with the Phase 4 verdict.
+
+**Cell wording clarification:** K=2 / bin 6-8 / OOD at p15 is the cleanest non-saturated diagnostic cell (usable policy spread; greedy_2_F = 0.643). K=2 / bin 8-10 / OOD at p15 is the best PPO improvement cell over PPO_A, with PPO_BCD / PPO_B / PPO_D all reaching 0.148 raw success — **+9.1 pp over PPO_A's 0.057**. That improvement is NOT what V3B was designed for: it's a soft regularization effect from training-time `env.max_steps=8` + permissive step penalty (PPO_B/D/BC/BCD have explored 2-step plans more thoroughly during their 1M-step training than PPO_A did under K=3 + harsh step cost).
+
+**B+C result:** Bucket A clean (CE=0, tox=0); Bucket B no greedy-CI-excluded advantage anywhere on K≥4.
+**D result:** Bucket A modestly lower mean_unc_path_max; Bucket B same.
+**B+C+D result:** Lowest mean_unc_path_max across all PPOs; otherwise tied with B/BC/D on success rate.
+
+**Does any reward beat reward-aware greedy?** No — greedy_dyn_5_fused saturates at 1.000 at every K≥5 cell where it's testable. No PPO − greedy_dyn_5_F CI excludes zero in PPO favor.
+
+**Design lock passed:** ✅ Yes (`LOCKED_DESIGN_TECHNICAL_ONLY`). All reward modes implement, dispatch, train, and evaluate without numerical issues. V2 modes byte-identical (regression-tested).
+
+**V3C dynamics work is now the recommended next phase:** ✅ Yes.
+1. V3A Track N safety pre-check (lowest cost; Track N 64D NB VAE already trained).
+2. Contraction-regulariser dynamics (V3.fallback.B) if Track N is also saturated.
+3. SCANVI 32D / ZINB 64D as alternative axis-A fallbacks.
+
+The locked reward stack from `V3_CONTROLLER_OBJECTIVE_SPEC.md` applies unchanged to any new dynamics.
+
+**Insightful observations beyond the headline:**
+1. **"Freeband K=2 advantage"** is a *training-time horizon* effect, not a planning-depth effect. Training with `max_steps=8` + permissive step penalty gives PPO better K=2 sample efficiency by accident — a hyperparameter insight worth recording for any future V3C controller.
+2. **Uncertainty signal is mostly state-dependent**, not action-dependent: mean_unc_path_max is ~0.60 (easy cells) vs ~0.70 (hard cells) regardless of which gene actions the policy picks. Variant D cannot easily steer the policy within a fixed start state. For Variant D to be load-bearing in V3C, the new dynamics field needs more action-discriminating uncertainty (ensemble disagreement, not single-head heteroscedastic).
+3. **Variant C is hardness-sensitive**; Variants B and D are hardness-insensitive — argues for using C as a soft constraint when problem is not at its difficulty edge.
+
+**Sacred-rule conformance:**
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` clean.
+- No VAE/dynamics retraining; PPO_A reused as frozen V2 baseline.
+- All new outputs under `artifacts_v3/` (plus repo-root `V3_CONTROLLER_OBJECTIVE_SPEC.md` which is a design spec, not an artifact).
+- Test suite: **356 passed / 2 skipped**, no regressions.
+
+**Committed (proposed):**
+- `src/rl/biology_rewards.py`, `src/rl/reward.py`, `src/rl/environment.py`, `src/rl/baselines.py` (additive edits)
+- `config/rl.yaml` (additive Phase 4 knobs)
+- `scripts/train_rl_v3b.py` (additive --mode choices)
+- `scripts/evaluate_rl_v3b_phase4.py` (new)
+- `scripts/aggregate_v3b_phase4.py` (new)
+- `tests/test_fused_rewards.py` (new)
+- `V3_CONTROLLER_OBJECTIVE_SPEC.md` (new, repo root)
+- `artifacts_v3/interpretation/v3b_reward_stack_lock.md` (new)
+- PROGRESS.md (this entry)
+
+**Artifacts (local, not committed):**
+- 18 new PPO checkpoints (6 smoke + 12 final) under `artifacts_v3/rl_v3b_*/`
+- Calibration evals under `artifacts_v3/eval_v3b_phase4_calib/eps_{p15,p10}/`
+- Final eval matrix under `artifacts_v3/eval_v3b_reward_stack/{seed42,seed0,seed1,seed7}/` + aggregate
+
+**Blockers:** none.
+
+**Next (V3C — separate session, awaiting user approval):**
+1. **V3A Track N safety pre-check** (V3A workflow §A1-bg-3+ paused since 2026-05-17): pairs → RoR dynamics on Track N 64D NB → reachability oracle → greedy saturation check at p15. If Track N's greedy_dyn_2 < 0.95 at K=4/bin 8-10/OOD, re-evaluate the locked reward stack on Track N. Cost: ~2 hours.
+2. If Track N is also saturated, escalate to V3.fallback.B contraction-regulariser dynamics (V3 plan §5).
+3. SCANVI 32D and ZINB 64D as alternative fallbacks per V3 stub §4.
+
+---
+
 ## Session 2026-05-19-0050  (agent: research-lead, V3B)
 
 **Phase:** V3B Phase 3b — Stricter-epsilon diagnostic (p15, p10, p5) — no retraining

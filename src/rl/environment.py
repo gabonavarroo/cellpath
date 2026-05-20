@@ -91,6 +91,19 @@ class CellReprogrammingEnv(gym.Env):
         beta_step_cost: float = 0.05,
         hybrid_alpha: float = 1.0,
         hybrid_terminal_bonus: float = 1.0,
+        safety_tox_per_action: np.ndarray | None = None,
+        safety_essential_per_action: np.ndarray | None = None,
+        lambda_tox: float = 0.10,
+        lambda_ce: float = 0.05,
+        free_steps: int = 3,
+        mild_until: int = 5,
+        mild_beta: float = 0.02,
+        heavy_beta: float = 0.10,
+        freeband_success_bonus: float = 1.0,
+        lambda_unc_path: float = 0.05,
+        uncertainty_reduce: str = "mean_sigma",
+        uncertainty_clip_min: float = -5.0,
+        uncertainty_clip_max: float = 3.0,
     ) -> None:
         super().__init__()
 
@@ -111,6 +124,47 @@ class CellReprogrammingEnv(gym.Env):
         self.beta_step_cost = float(beta_step_cost)
         self.hybrid_alpha = float(hybrid_alpha)
         self.hybrid_terminal_bonus = float(hybrid_terminal_bonus)
+        # V3B safety arrays (Phase 2). If None, the env emits tox_path=0 and
+        # common_essential_count=0; reward_mode != "safety_aware" ignores these.
+        self.safety_tox_per_action: np.ndarray | None = (
+            np.asarray(safety_tox_per_action, dtype=np.float32)
+            if safety_tox_per_action is not None
+            else None
+        )
+        self.safety_essential_per_action: np.ndarray | None = (
+            np.asarray(safety_essential_per_action, dtype=bool)
+            if safety_essential_per_action is not None
+            else None
+        )
+        if self.safety_tox_per_action is not None and self.safety_tox_per_action.shape != (self.n_genes,):
+            raise ValueError(
+                f"safety_tox_per_action shape mismatch: expected ({self.n_genes},), "
+                f"got {self.safety_tox_per_action.shape}"
+            )
+        if self.safety_essential_per_action is not None and self.safety_essential_per_action.shape != (self.n_genes,):
+            raise ValueError(
+                f"safety_essential_per_action shape mismatch: expected ({self.n_genes},), "
+                f"got {self.safety_essential_per_action.shape}"
+            )
+        self.lambda_tox = float(lambda_tox)
+        self.lambda_ce = float(lambda_ce)
+        # V3B Phase 3 freeband schedule knobs (additive; ignored when reward_mode != path_length_freeband).
+        self.free_steps = int(free_steps)
+        self.mild_until = int(mild_until)
+        self.mild_beta = float(mild_beta)
+        self.heavy_beta = float(heavy_beta)
+        self.freeband_success_bonus = float(freeband_success_bonus)
+        # V3B Phase 4 uncertainty knobs (active when reward_mode ∈ {uncertainty_aware, biorealistic_fused}).
+        self.lambda_unc_path = float(lambda_unc_path)
+        self.uncertainty_reduce = str(uncertainty_reduce)
+        self.uncertainty_clip_min = float(uncertainty_clip_min)
+        self.uncertainty_clip_max = float(uncertainty_clip_max)
+        # Per-episode accumulators (reset in reset()).
+        self._tox_path_so_far: float = 0.0
+        self._ce_count_so_far: int = 0
+        self._unc_path_max_so_far: float = 0.0
+        self._unc_path_sum_so_far: float = 0.0
+        self._unc_path_n_steps: int = 0
         self._start_pool = (
             np.asarray(start_pool_latents, dtype=np.float32)
             if start_pool_latents is not None
@@ -169,11 +223,20 @@ class CellReprogrammingEnv(gym.Env):
         self._step_idx = 0
         self._used_genes = set()
         self._current_mask = self._compute_mask()
+        self._tox_path_so_far = 0.0
+        self._ce_count_so_far = 0
+        self._unc_path_max_so_far = 0.0
+        self._unc_path_sum_so_far = 0.0
+        self._unc_path_n_steps = 0
 
         info = {
             "action_mask": self._current_mask.copy(),
             "distance": float(distance_to_reference(self._z, self.z_ref, metric=self.distance_metric)),
             "step": 0,
+            "tox_path": 0.0,
+            "common_essential_count": 0,
+            "unc_path_max": 0.0,
+            "unc_path_mean": 0.0,
         }
         return self._z.copy(), info
 
@@ -212,6 +275,17 @@ class CellReprogrammingEnv(gym.Env):
                 step_idx=self._step_idx,
                 hybrid_alpha=self.hybrid_alpha,
                 hybrid_terminal_bonus=self.hybrid_terminal_bonus,
+                tox_path=self._tox_path_so_far,
+                common_essential_count=self._ce_count_so_far,
+                lambda_tox=self.lambda_tox,
+                lambda_ce=self.lambda_ce,
+                free_steps=self.free_steps,
+                mild_until=self.mild_until,
+                mild_beta=self.mild_beta,
+                heavy_beta=self.heavy_beta,
+                freeband_success_bonus=self.freeband_success_bonus,
+                unc_path_max=self._unc_path_max_so_far,
+                lambda_unc_path=self.lambda_unc_path,
             )
 
             # Mask not relevant on terminal step; leave it consistent
@@ -221,6 +295,12 @@ class CellReprogrammingEnv(gym.Env):
                 "success": is_success,
                 "distance": d,
                 "step": self._step_idx,
+                "tox_path": float(self._tox_path_so_far),
+                "common_essential_count": int(self._ce_count_so_far),
+                "unc_path_max": float(self._unc_path_max_so_far),
+                "unc_path_mean": float(
+                    self._unc_path_sum_so_far / max(1, self._unc_path_n_steps)
+                ),
             }
             return self._z.copy(), reward, terminated, truncated, info
 
@@ -237,10 +317,17 @@ class CellReprogrammingEnv(gym.Env):
             g_t = torch.tensor([gene_idx], dtype=torch.long)
             out = self.dynamics_model(z_t, g_t)
 
-        # The dynamics model returns (z_next, mu, log_var); test stubs may return same shape
+        # V3B Phase 4: extract log_var whenever any uncertainty-aware path needs it.
+        # V1 path (lambda_unc > 0) → per-step σ penalty inside compute_reward;
+        # V3B path (reward_mode ∈ {uncertainty_aware, biorealistic_fused, multi_objective}) →
+        # accumulate unc_path_max_so_far + unc_path_sum_so_far below.
+        _needs_unc = (
+            self.lambda_unc > 0.0
+            or self.reward_mode in ("uncertainty_aware", "biorealistic_fused", "multi_objective")
+        )
         if isinstance(out, tuple) and len(out) >= 1:
             z_next = out[0]
-            if len(out) >= 3 and self.lambda_unc > 0.0:
+            if len(out) >= 3 and _needs_unc:
                 log_var_t = out[2]
                 if isinstance(log_var_t, torch.Tensor):
                     log_var_np = log_var_t.detach().cpu().numpy().squeeze(0)
@@ -259,6 +346,26 @@ class CellReprogrammingEnv(gym.Env):
 
         self._step_idx += 1
         self._used_genes.add(action)
+
+        # Accumulate safety quantities for non-NOOP gene actions (this branch is the gene branch).
+        if self.safety_tox_per_action is not None and 0 <= action < self.n_genes:
+            self._tox_path_so_far += float(self.safety_tox_per_action[action])
+        if self.safety_essential_per_action is not None and 0 <= action < self.n_genes:
+            self._ce_count_so_far += int(bool(self.safety_essential_per_action[action]))
+
+        # V3B Phase 4: accumulate per-step uncertainty when available.
+        if log_var_np is not None:
+            from src.rl.biology_rewards import per_step_uncertainty_scalar
+            unc_step = per_step_uncertainty_scalar(
+                log_var_np,
+                clip_min=self.uncertainty_clip_min,
+                clip_max=self.uncertainty_clip_max,
+                reduce=self.uncertainty_reduce,
+            )
+            if unc_step > self._unc_path_max_so_far:
+                self._unc_path_max_so_far = float(unc_step)
+            self._unc_path_sum_so_far += float(unc_step)
+            self._unc_path_n_steps += 1
 
         terminated = is_success  # reaching ε ends the episode successfully
         truncated = (self._step_idx >= self.max_steps) and not terminated
@@ -284,6 +391,17 @@ class CellReprogrammingEnv(gym.Env):
             step_idx=self._step_idx,
             hybrid_alpha=self.hybrid_alpha,
             hybrid_terminal_bonus=self.hybrid_terminal_bonus,
+            tox_path=self._tox_path_so_far,
+            common_essential_count=self._ce_count_so_far,
+            lambda_tox=self.lambda_tox,
+            lambda_ce=self.lambda_ce,
+            free_steps=self.free_steps,
+            mild_until=self.mild_until,
+            mild_beta=self.mild_beta,
+            heavy_beta=self.heavy_beta,
+            freeband_success_bonus=self.freeband_success_bonus,
+            unc_path_max=self._unc_path_max_so_far,
+            lambda_unc_path=self.lambda_unc_path,
         )
 
         self._current_mask = self._compute_mask()
@@ -292,6 +410,12 @@ class CellReprogrammingEnv(gym.Env):
             "success": is_success,
             "distance": d,
             "step": self._step_idx,
+            "tox_path": float(self._tox_path_so_far),
+            "common_essential_count": int(self._ce_count_so_far),
+            "unc_path_max": float(self._unc_path_max_so_far),
+            "unc_path_mean": float(
+                self._unc_path_sum_so_far / max(1, self._unc_path_n_steps)
+            ),
         }
         return self._z.copy(), reward, terminated, truncated, info
 
@@ -500,6 +624,46 @@ def resolve_epsilon(cfg: Any) -> tuple[float, str]:
     return eps, f"json(p{pct})"
 
 
+def _load_safety_arrays(cfg: Any, n_genes: int) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Load V3B safety arrays from ``cfg.rl.reward.safety_table_path``, if configured.
+
+    Returns ``(None, None)`` when no safety table is configured or when the path does
+    not exist. This is the V2-mode default (no safety penalty).
+
+    The optional ``cfg.rl.reward.permute_chronos`` flag (bool, default False) triggers
+    the V3B Phase 2 null control: chronos labels are randomly permuted across genes
+    so the reward signal becomes structurally uninformative.
+    """
+    reward_cfg = cfg.rl.reward
+    if not hasattr(reward_cfg, "get"):
+        return None, None
+    safety_path = reward_cfg.get("safety_table_path", None)
+    if safety_path is None or str(safety_path).strip() == "":
+        return None, None
+    p = Path(str(safety_path))
+    if not p.exists():
+        log.warning(
+            "rl.reward.safety_table_path=%s does not exist — V3B safety arrays unloaded. "
+            "Reward modes that depend on safety (e.g. safety_aware) will see "
+            "tox_path=0 and common_essential_count=0 (i.e. behave like terminal_only_step_cost).",
+            p,
+        )
+        return None, None
+    import polars as pl
+
+    from src.rl.biology_rewards import build_safety_arrays
+
+    df = pl.read_parquet(str(p))
+    permute = bool(reward_cfg.get("permute_chronos", False))
+    seed = int(reward_cfg.get("permute_chronos_seed", 42))
+    tox, ess = build_safety_arrays(df, n_genes=n_genes, permute_chronos=permute, seed=seed)
+    log.info(
+        "Loaded V3B safety arrays from %s (n_genes=%d, n_essential=%d, permuted=%s).",
+        p, n_genes, int(ess.sum()), permute,
+    )
+    return tox, ess
+
+
 def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
     """Return a zero-arg factory that constructs a fresh ``CellReprogrammingEnv``.
 
@@ -514,6 +678,9 @@ def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
 
     allow_untrained = bool(cfg.rl.train.get("smoke_with_untrained_dynamics", False))
     dynamics_model = _load_dynamics_model(cfg, allow_untrained=allow_untrained)
+
+    # V3B safety arrays (None for V2 modes; arrays for safety_aware mode).
+    safety_tox, safety_ess = _load_safety_arrays(cfg, n_genes=n_genes)
 
     # Filter start pool to cells that NEED steering (avoid reward-hacking from already-near-target starts).
     # "auto" → use epsilon (cells at-or-near goal are trivially successful).
@@ -558,6 +725,29 @@ def make_env_factory(cfg: Any) -> Callable[[], CellReprogrammingEnv]:
             beta_step_cost=float(reward_cfg.get("beta_step_cost", 0.05)),
             hybrid_alpha=float(reward_cfg.get("hybrid_alpha", 1.0)),
             hybrid_terminal_bonus=float(reward_cfg.get("hybrid_terminal_bonus", 1.0)),
+            safety_tox_per_action=safety_tox,
+            safety_essential_per_action=safety_ess,
+            lambda_tox=float(reward_cfg.get("lambda_tox", 0.10)),
+            lambda_ce=float(reward_cfg.get("lambda_ce", 0.05)),
+            free_steps=int(_get_freeband(reward_cfg, "free_steps", 3)),
+            mild_until=int(_get_freeband(reward_cfg, "mild_until", 5)),
+            mild_beta=float(_get_freeband(reward_cfg, "mild_beta", 0.02)),
+            heavy_beta=float(_get_freeband(reward_cfg, "heavy_beta", 0.10)),
+            freeband_success_bonus=float(_get_freeband(reward_cfg, "success_bonus", 1.0)),
+            lambda_unc_path=float(reward_cfg.get("lambda_unc_path", 0.05)),
+            uncertainty_reduce=str(reward_cfg.get("uncertainty_reduce", "mean_sigma")),
+            uncertainty_clip_min=float(reward_cfg.get("uncertainty_clip_min", -5.0)),
+            uncertainty_clip_max=float(reward_cfg.get("uncertainty_clip_max", 3.0)),
         )
 
     return factory
+
+
+def _get_freeband(reward_cfg: Any, key: str, default: Any) -> Any:
+    """Read a nested ``reward.freeband.<key>`` from the Hydra config with a default."""
+    fb = reward_cfg.get("freeband", None) if hasattr(reward_cfg, "get") else None
+    if fb is None:
+        return default
+    if hasattr(fb, "get"):
+        return fb.get(key, default)
+    return getattr(fb, key, default)

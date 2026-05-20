@@ -70,6 +70,38 @@ rl:
     # R_t = hybrid_alpha · (d_prev - d_next); R_T += hybrid_terminal_bonus · 1[success].
     hybrid_alpha: 1.0
     hybrid_terminal_bonus: 1.0
+    # V3B Phase 2 — safety_aware mode params (Variant C of V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md §4).
+    # R_T = 1·is_success - β·t - λ_tox·tox_path - λ_ce·common_essential_count
+    # Activate by setting `mode: safety_aware` and pointing safety_table_path at the V3B biology
+    # layer parquet built by scripts/build_v3b_biology_layer.py. When mode != safety_aware,
+    # these knobs are inert. λ defaults chosen per plan §4 Variant C; tune in Phase 2 only after
+    # baseline single-axis run shows directional signal.
+    lambda_tox: 0.10
+    lambda_ce: 0.05
+    safety_table_path: null           # e.g. "artifacts_v3/v3b_biology/gene_safety.parquet"
+    permute_chronos: false            # V3B Phase 2 null control — set true for the permuted PPO_C run
+    permute_chronos_seed: 42
+    # V3B Phase 3 — path_length_freeband mode params (Variant B of V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md §6.3).
+    # R_T = success_bonus·1[is_success] − path_penalty(T) where path_penalty has 3 regions:
+    #   T ≤ free_steps                : 0          (free band — empirically anchored composability)
+    #   free_steps < T ≤ mild_until   : mild_beta·(T − free_steps)
+    #   T > mild_until                : mild_beta·(mild_until − free_steps) + heavy_beta·(T − mild_until)
+    # Activate by setting `mode: path_length_freeband` (typically with env.max_steps=8 to allow exploration).
+    # When mode != path_length_freeband, these knobs are inert. Defaults per plan §6.3 + Phase 3 brief.
+    freeband:
+      free_steps: 3                   # 0 penalty up through T=3 (anchored by Norman K=2 + 1 plausible step)
+      mild_until: 5                   # mild slope through T=4, 5
+      mild_beta: 0.02                 # 0.02 per step in the mild band → 0.02 at T=4, 0.04 at T=5
+      heavy_beta: 0.10                # 0.10 per step beyond T=5 → 0.14 at T=6, 0.34 at T=8
+      success_bonus: 1.0              # terminal bonus when within ε of z_ref
+    # V3B Phase 4 — uncertainty + fused reward knobs (Variant D, B+C, B+C+D).
+    # The path-aware uncertainty term `lambda_unc_path · unc_path_max` is INDEPENDENT of
+    # the existing V1 `lambda_unc` (per-step σ-L2 in absolute_distance mode). Active when
+    # `mode ∈ {uncertainty_aware, biorealistic_fused, multi_objective}`.
+    lambda_unc_path: 0.05
+    uncertainty_reduce: mean_sigma     # mean_sigma | max_sigma | mean_log_var
+    uncertainty_clip_min: -5.0
+    uncertainty_clip_max: 3.0
 
   # ----- PPO (MaskablePPO from sb3-contrib) -----
   ppo:

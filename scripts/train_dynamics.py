@@ -207,9 +207,12 @@ def main(cfg: DictConfig) -> int:
     from src.data.perturbation_pairs import generate_mock_pairs
     from src.models.dynamics import (
         PerturbationDynamicsModel,
+        action_diversity_penalty,
         composition_loss,
+        excessive_alignment_penalty,
         fit_ridge_baseline_from_pairs,
         heteroscedastic_nll,
+        universal_attractor_penalty,
     )
     from src.utils.device import device_summary, get_device
     from src.utils.seeding import set_seed
@@ -474,6 +477,33 @@ def main(cfg: DictConfig) -> int:
         patience          = int(cfg.dynamics.early_stop_patience)
         batch_size_ep     = int(cfg.dynamics.batch_size)
 
+        # V3C Phase 2 — contraction-aware regularizers (default all-zero / inert).
+        ca_cfg            = cfg.dynamics.get("contraction_aware", {}) or {}
+        ca_enabled        = bool(ca_cfg.get("enabled", False))
+        lambda_ea         = float(ca_cfg.get("lambda_excessive_alignment", 0.0)) if ca_enabled else 0.0
+        tau_ea            = float(ca_cfg.get("tau_excessive_alignment", 0.80))
+        lambda_ua         = float(ca_cfg.get("lambda_universal_attractor", 0.0)) if ca_enabled else 0.0
+        tau_ua            = float(ca_cfg.get("tau_universal_attractor", 0.80))
+        lambda_ad         = float(ca_cfg.get("lambda_action_diversity", 0.0)) if ca_enabled else 0.0
+        tau_ad            = float(ca_cfg.get("tau_action_diversity", 0.0))
+        # Load z_ref once when any contraction-aware term is active.
+        z_ref_t: torch.Tensor | None = None
+        if ca_enabled and (lambda_ea > 0.0 or lambda_ua > 0.0):
+            z_ref_path = Path(cfg.paths.vae_z_reference_centroid)
+            if not z_ref_path.exists():
+                raise FileNotFoundError(
+                    f"contraction_aware requires z_ref at {z_ref_path}. "
+                    "Either disable contraction_aware or point paths.vae_z_reference_centroid "
+                    "at the matching VAE's z_reference_centroid.npy."
+                )
+            z_ref_np = np.load(z_ref_path).astype(np.float32)
+            z_ref_t = torch.from_numpy(z_ref_np).to(device)
+            log.info(
+                "contraction_aware enabled | λ_ea=%.4f τ_ea=%.2f | λ_ua=%.4f τ_ua=%.2f "
+                "| λ_ad=%.4f τ_ad=%.4f | z_ref from %s",
+                lambda_ea, tau_ea, lambda_ua, tau_ua, lambda_ad, tau_ad, z_ref_path,
+            )
+
         combo_iter        = _iter_infinite(combo_loader) if combo_loader is not None else None
         best_val_nll      = float("inf")
         best_nll_epoch    = 0
@@ -533,6 +563,17 @@ def main(cfg: DictConfig) -> int:
                 if lambda_corr > 0.0:
                     from src.analysis.metrics import correlation_loss as _corr_loss
                     loss = loss + lambda_corr * _corr_loss(mu, target_delta)
+                # V3C Phase 2 — contraction-aware regularizers (no-op when λ_*=0).
+                if z_ref_t is not None and lambda_ea > 0.0:
+                    loss = loss + lambda_ea * excessive_alignment_penalty(
+                        mu, z_c, z_ref_t, tau=tau_ea
+                    )
+                if z_ref_t is not None and lambda_ua > 0.0:
+                    loss = loss + lambda_ua * universal_attractor_penalty(
+                        mu, z_c, z_ref_t, g, tau=tau_ua
+                    )
+                if lambda_ad > 0.0:
+                    loss = loss + lambda_ad * action_diversity_penalty(mu, tau_min=tau_ad)
                 batch_combo_loss = 0.0
 
                 if combo_iter is not None and lambda_combo > 0.0:

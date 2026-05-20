@@ -231,9 +231,15 @@ __marimo__/
 /artifacts_v2/
 !/artifacts_v2/*.md
 !/artifacts_v2/figures
+# Ignore artifacts_v3 contents but keep specific docs/figures subtrees tracked
+# (use dir/* not dir/ so the directory itself is not excluded — git cannot
+# re-include files whose parent directory is excluded).
+/artifacts_v3/*
+!/artifacts_v3/interpretation
 !/artifacts_v3/interpretations
-!/artifacts_v3/interpretations/**
 !/artifacts_v3/figures
-!/artifacts_v3/figures/**
+!/artifacts_v3/v3c
 !/artifacts_v3/*.md
-/artifacts_v3/
+/artifacts_v3/v3c/*
+!/artifacts_v3/v3c/interpretation
+!/artifacts_v3/v3c/figures

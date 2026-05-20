@@ -6,6 +6,66 @@
 
 ---
 
+## Session 2026-05-20-1300  (agent: research-lead, V3C Phase 1)
+
+**Phase:** V3C Phase 1 — PPO_BCD single-seed smoke (4 candidates) on locked B+C+D reward stack.
+
+**Status:** All 4 candidates trained and evaluated on the canonical 7-cell V3B matrix at the per-VAE p15 ε (recomputed exactly from each VAE's empirical control-cell distance distribution: 32D 2.9898, 64D legacy 3.0193, 64D NB 3.1120). Locked B+C+D coefficients throughout (`λ_tox=0.10, λ_ce=0.05, λ_unc_path=0.05`, freeband `{3, 5, 0.02, 0.10, 1.0}`, `env.max_steps=8`). Adaptive 500k → 1M training schedule honored.
+
+**Verdict: `PHASE1_COMPLETE — PHASE4_ESCALATION_RECOMMENDED_ON_TRACKS_L_AND_N`.**
+
+**Headline finding:** Track N (64D NB + RoR_corr010) at seed 42 × 500k produced **CANDIDATE_SIGNAL_RAW** at K=2/bin8-10/OOD — PPO_BCD = 0.570 vs same-field reward-aware greedy_dyn_2_fused = 0.495 (**+0.075 over greedy at a non-saturated cell**). This is the first such V3 same-field same-reward planning-advantage signal. **It did not survive doubling training to 1M** (regressed to PPO_BCD = 0.445; greedy unchanged at 0.495). Single-seed result; the 500k vs 1M tension can only be resolved with 4-seed CIs in Phase 4.
+
+**Per-field outcomes:**
+
+| Field | 500k → 1M | PPO_BCD K=2/b8-10 | greedy_dyn_2_fused | PPO−g_K | Verdict |
+|---|---|---:|---:|---:|---|
+| Anchor V2 RoR_corr010 (reused) | (1M reused from V3B Phase 4) | 0.120 | 0.120 | 0.000 (tie) | `NO_SIGNAL` (V3B TECHNICAL_ONLY reproduced) |
+| Track L (n64_legacy_ror_corr010) | 500k 0.705 → 1M 0.705 (stable) | 0.705 | 0.695 | +0.010 (within ±0.03 tie) | `WEAK_SIGNAL` — anchor lift 5.9× but Pareto fails on `mean_final_distance` regression +0.22 (out of ≤0.10 tolerance) |
+| **Track N (n64_nb_ror_corr010)** | **500k 0.570 → 1M 0.445** (regressed) | 0.445 (1M) | 0.495 | −0.050 (1M, out of Pareto) | **`CANDIDATE_SIGNAL_RAW` at 500k → `WEAK_SIGNAL` at 1M**; multi-seed needed |
+| mean_delta_corr_010 wildcard | 500k stopped (EARLY_FLAT) | 0.000 | 0.000 | n/a at K=2 | `NO_SIGNAL` — PPO learned NOOP strategy; mean_steps 0.26-0.90 |
+
+**Anchor lift at K=2/bin8-10/OOD (the V3B-Phase-4-discriminating cell):** Track L +0.585 (5.9×) and Track N +0.450/0.325 (4.8×/3.7× at 500k/1M) over anchor's 0.120. This validates the Phase 0C audit's Bucket U-B prediction.
+
+**Reward-fit consistency:** `mean_tox_path = 0.0` and `mean_common_essential_per_ep = 0.0` for PPO_BCD on every field × cell. Variant C constraint (λ_tox/λ_ce) is structurally working; the question is purely whether the dynamics field provides planning leverage.
+
+**Code/artifacts:**
+- 5 new PPO checkpoints under `artifacts_v3/v3c/rl_smokes/{track_l_n64_legacy_ror_corr010_seed42_500k, track_l_..._seed42_1M, track_n_n64_nb_ror_corr010_seed42_500k, track_n_..._seed42_1M, wildcard_mean_delta_corr_010_seed42_500k}/`.
+- Anchor evaluation in `artifacts_v3/v3c/rl_smokes/anchor_v2_ror_corr010_1M_reused/eval/`.
+- `artifacts_v3/v3c/interpretation/v3c_phase1_ppo_smoke_summary.md` (this session's interpretation).
+
+**Sacred-rule check:**
+- Frozen tiers untouched (`git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` → clean).
+- All V3C outputs under `artifacts_v3/v3c/`.
+- Test suite: 377 passed / 2 skipped (matches V3B baseline).
+
+**Recommended next step:** Phase 4 escalation on both Track L and Track N (3 additional seeds {0, 1, 7} × 1M each on the locked B+C+D + per-VAE p15). If multi-seed paired δ vs greedy_dyn_2_fused at K=2/bin8-10/OOD excludes zero with PPO above greedy → first V3 `LOCKED_DESIGN_POSITIVE_SIGNAL`. If neither survives multi-seed → Phase 2 (Candidate A.iv contraction-aware dynamics per V3C plan §8).
+
+---
+
+## Session 2026-05-19-2200  (agent: research-lead, V3C Phase 0 — audit)
+
+**Phase:** V3C Phase 0A/0B/0C — dynamics utility audit framework + execution.
+
+**Status:** Phase 0A inventoried all 29 candidate dynamics fields; Phase 0B implemented the audit (`src/analysis/dynamics_utility.py` + 21 TDD tests, `scripts/audit_dynamics_utility_v3c.py`, `scripts/aggregate_v3c_utility_audit.py`); Phase 0C audited every eligible field end-to-end and proposed the Phase 1 smoke roster.
+
+**Verdict: `PHASE0_AUDIT_COMPLETE — PHASE_1_SMOKE_TARGETS_PROPOSED`.**
+
+**Headline finding:** every existing dynamics field exhibits one of three structural pathologies under the locked B+C+D reward stack — universal over-contraction (24 OT-trained fields), lower-universality + K≤5 unreachable (4 mean-delta), or anti-contractive gate-passing (Soft-OT). No field passes Bucket U-G; smoke roster picked via the Wildcard route.
+
+**Proposed Phase 1 smoke roster** (4 slots): anchor (V2 RoR_corr010), Track L (n64_legacy_ror_corr010), Track N (n64_nb_ror_corr010), mean_delta_corr_010 wildcard.
+
+**Code/artifacts:**
+- `V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md` (repo root) — full plan.
+- `scripts/{inventory_dynamics_v3c, audit_dynamics_utility_v3c, aggregate_v3c_utility_audit}.py`.
+- `src/analysis/dynamics_utility.py`, `tests/test_dynamics_utility.py` (+21 unit tests).
+- `artifacts_v3/v3c/utility_audit/` — full inventory + per-bucket CSVs + per-field detail JSONs + summary/ranking MDs.
+- `artifacts_v3/v3c/interpretation/{v3c_phase0b_implementation, v3c_phase0_utility_audit}.md`.
+
+**Test suite:** 377 passed / 2 skipped.
+
+---
+
 ## Session 2026-05-19-1711  (agent: cleanup, V3B Phase 4)
 
 **Phase:** V3B Phase 4 cleanup — documentation/consistency only.

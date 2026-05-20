@@ -87,6 +87,9 @@ def _vae_dir_for(field_path: str, n_latent: int) -> Path:
         return REPO_ROOT / "artifacts_v3/vae_n64_legacy"
     if "artifacts_v3/dynamics_n64_nb" in field_path:
         return REPO_ROOT / "artifacts_v3/vae_n64_nb"
+    # V3C Phase 2 — contraction-aware candidates use Track L's 64D legacy VAE by default.
+    if "artifacts_v3/v3c/dynamics_candidates/contraction_aware" in field_path:
+        return REPO_ROOT / "artifacts_v3/vae_n64_legacy"
     if field_path.startswith("artifacts_64/"):
         return REPO_ROOT / "artifacts_64/vae"
     # Default 32D — both artifacts/ and artifacts_v2/ dynamics use artifacts/vae
@@ -107,6 +110,9 @@ def _pairs_dir_for(field_path: str) -> Path:
         return REPO_ROOT / "artifacts_v3/pairs_n64_legacy"
     if "dynamics_n64_nb" in field_path:
         return REPO_ROOT / "artifacts_v3/pairs_n64_nb"
+    # V3C Phase 2 — contraction-aware candidates trained on Track L's 64D legacy pairs.
+    if "artifacts_v3/v3c/dynamics_candidates/contraction_aware" in field_path:
+        return REPO_ROOT / "artifacts_v3/pairs_n64_legacy"
     if field_path.startswith("artifacts_64/"):
         return REPO_ROOT / "artifacts_64/pairs"
     # V1 OT pairs (artifacts/dynamics*, artifacts_v2/dynamics_v1ot_*)

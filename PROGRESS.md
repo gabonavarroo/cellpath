@@ -6,6 +6,75 @@
 
 ---
 
+## Session 2026-05-20-1330  (agent: research-lead, V3C Phase 2 + Phase 4)
+
+**Phase:** V3C dual-track session — Track A (Phase 4 4-seed escalation on Track L / Track N) + Track B (Phase 2 contraction-aware dynamics candidate v1).
+
+**Status:** Both tracks complete. **Track A verdict: `NO_STABLE_SIGNAL`.** **Track B verdict: `PHASE2_DIAGNOSTIC_ONLY`.** No `LOCKED_DESIGN_POSITIVE_SIGNAL` emerged. The Phase 0C audit's central diagnosis — universal-attractor structure caps PPO planning room over greedy — is reinforced by both tracks.
+
+### Track A — Phase 4 escalation on Track L / Track N (3 new seeds each)
+
+- 9 new PPO checkpoints trained on locked B+C+D + per-VAE p15:
+  - `artifacts_v3/v3c/rl_final/track_l_4seed_locked/seed{0,1,7}_1M/` (Track L 1M)
+  - `artifacts_v3/v3c/rl_final/track_n_4seed_locked/seed{0,1,7}_{500k,1M}/` (Track N at both checkpoints)
+- 9 evaluations + 3 reused Phase 1 seed-42 evals (symlinked). Aggregated to 4-seed paired CIs.
+
+**Headline 4-seed paired δ at K=2/bin8-10/OOD (PPO_BCD − same-field reward-aware greedy_dyn_2_fused):**
+
+| Track / checkpoint | PPO_BCD (4-seed) | greedy_dyn_2_fused | Δ | CI95 | Verdict |
+|---|---:|---:|---:|---|---|
+| Track L 1M | 0.705 ± 0.000 | 0.695 | +0.010 | [+0.010, +0.010] excludes 0 | tie raw, **distance regresses +0.173** |
+| Track N 500k | 0.499 ± 0.052 | 0.495 | +0.004 | [−0.047, +0.055] includes 0 | seed-42 +0.075 was variance |
+| Track N 1M | 0.472 ± 0.097 | 0.495 | −0.023 | [−0.117, +0.072] includes 0 | no signal, worse than 500k |
+
+- Track L: 4.8× anchor lift confirmed (PPO 0.705 vs anchor 0.148) but PPO has no planning advantage over Track L's reward-aware greedy_dyn_2. Pareto-distance failure (+0.173 > 0.10 tolerance) prevents `TRACKL_PARETO_OR_TIE`.
+- Track N: 500k seed-42 `CANDIDATE_SIGNAL_RAW` is single-seed variance — per-seed Δ = [+0.075, −0.005, −0.050, −0.005]. 1M consistently worse than 500k.
+- Both tracks at K=2/bin6-8/OOD: PPO loses to greedy by ~12-14% across all seeds (CIs exclude 0).
+
+### Track B — Phase 2 contraction-aware dynamics v1
+
+- Implemented additive config-gated regularizer: `excessive_alignment_penalty (L_ea)`, `universal_attractor_penalty (L_ua)`, `action_diversity_penalty (L_ad)` in `src/models/dynamics.py`. Wired into `scripts/train_dynamics.py` behind `dynamics.contraction_aware.*` keys (default disabled). 15 new TDD tests in `tests/test_dynamics_contraction_aware.py`, all passing.
+- Conservative coefficients: τ_ea = τ_ua = 0.80, λ_ea = λ_ua = 0.05, λ_ad = 0. Trained on Track L's 64D legacy pairs. Output: `artifacts_v3/v3c/dynamics_candidates/contraction_aware_v1/`.
+
+**Audit results vs Track L baseline:**
+
+| Metric | Track L | contraction_aware_v1 | Δ |
+|---|---:|---:|---:|
+| val Pearson | 0.620 | 0.619 | −0.001 (preserved ✓) |
+| OOD Pearson | 0.515 | 0.514 | −0.001 (preserved ✓) |
+| contraction_fraction | 0.9998 | 0.9998 | 0.0 (unchanged) |
+| **gene_universality_max** | 0.933 | **0.905** | **−0.028 (targeted axis moved ✓)** |
+| alignment_cos_median | 0.821 | 0.806 | −0.015 |
+| action_diversity_per_state | 0.107 | 0.104 | −0.003 |
+| K=2/bin8-10/OOD beam reach | 0.560 | 0.560 | 0.000 |
+| util_score | 0.365 | 0.370 | +0.005 |
+
+The regularizer moves the targeted `UNIVERSAL_ATTRACTOR_GENE` axis (gu_max −0.028) without harming prediction, but the move is too small to break `contraction_fraction = 1.0` or unlock new control utility versus Track L. No PPO smoke run (gating condition `MODERATE_UTILITY` not met).
+
+### Tests + frozen tiers
+- 392 passed / 2 skipped (was 377 + 15 new contraction-aware tests).
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` → clean.
+
+### Files written
+- `artifacts_v3/v3c/interpretation/v3c_phase2_contraction_aware_spec.md` (committed by user mid-session at 1629aea).
+- `artifacts_v3/v3c/interpretation/v3c_phase2_contraction_aware_summary.md` — Phase 2 verdict (this commit).
+- `artifacts_v3/v3c/interpretation/v3c_phase4_track_ln_escalation.md` — Phase 4 verdict (this commit).
+- `artifacts_v3/v3c/dynamics_candidates/contraction_aware_v1/` — trained dynamics + gate (local, not committed).
+- `artifacts_v3/v3c/utility_audit/artifacts_v3__v3c__dynamics_candidates__contraction_aware_v1/` — U-A through U-G + composite (local).
+- `artifacts_v3/v3c/rl_final/track_{l,n}_4seed_locked/` — 9 new PPO checkpoints + evals + aggregates (local).
+- `src/models/dynamics.py`, `scripts/train_dynamics.py`, `config/dynamics.yaml`, `tests/test_dynamics_contraction_aware.py` (committed by user at 1629aea).
+- `scripts/audit_dynamics_utility_v3c.py` — additive path resolution for contraction-aware candidates (this commit).
+
+### Recommended next session
+1. **Phase 2.5 — more aggressive contraction-aware variants** (`v2_aggressive` τ=0.60 λ=0.10; `v3_diverse` with λ_ad>0). Cost: ~20-30 min per variant.
+2. **Phase 3 — ensemble-disagreement dynamics** (V3.fallback.C) as an orthogonal axis. The single-head uncertainty was state-dependent but not action-dependent (V3B Phase 4 finding); an ensemble would give action-discriminating signal for Variant D.
+3. **No reward-coefficient tuning** until either path produces multi-seed positive or strong Phase 2.
+
+### Blockers
+None.
+
+---
+
 ## Session 2026-05-20-1300  (agent: research-lead, V3C Phase 1)
 
 **Phase:** V3C Phase 1 — PPO_BCD single-seed smoke (4 candidates) on locked B+C+D reward stack.

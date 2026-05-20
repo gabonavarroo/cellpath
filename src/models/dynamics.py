@@ -336,6 +336,109 @@ def heteroscedastic_nll(
     return loss
 
 
+def _alignment_cosine(
+    mu: torch.Tensor,
+    z: torch.Tensor,
+    z_ref: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Per-row cos(μ, z_ref − z) with safe denominators.
+
+    Returns ``(B,)`` cosine in [−1, 1]. When ``‖μ‖ ≈ 0`` the cosine is undefined; we
+    return 0 in that row (treated as "no contractive pressure"), which keeps the
+    excessive-alignment penalty inert on null-magnitude predictions.
+    """
+    target_dir = z_ref.unsqueeze(0) - z                       # (B, D)
+    target_norm = target_dir.norm(dim=-1)                      # (B,)
+    mu_norm = mu.norm(dim=-1)                                  # (B,)
+    denom = target_norm * mu_norm + eps                        # (B,)
+    dot = (mu * target_dir).sum(dim=-1)                        # (B,)
+    cos = dot / denom
+    # Zero out rows where ‖μ‖ is effectively zero — cos is undefined there.
+    safe_mask = (mu_norm > eps).to(cos.dtype)
+    return cos * safe_mask
+
+
+def excessive_alignment_penalty(
+    mu: torch.Tensor,
+    z: torch.Tensor,
+    z_ref: torch.Tensor,
+    tau: float = 0.80,
+) -> torch.Tensor:
+    """V3C Phase 2 — penalise per-(z, g) cos(μ, z_ref − z) above ``tau``.
+
+    L_ea = mean over rows of relu(α − τ)² where α = cos(μ, z_ref − z).
+
+    Used as a soft cap on universal-attractor structure: pairs whose predicted Δz is
+    "too" aligned with the direction toward z_ref accumulate quadratic penalty above τ.
+    Pairs at or below τ pay zero penalty (one-sided ReLU). Zero-magnitude μ rows are
+    treated as α = 0 (see :func:`_alignment_cosine`).
+    """
+    cos = _alignment_cosine(mu, z, z_ref)                     # (B,)
+    excess = torch.relu(cos - float(tau))                      # (B,)
+    return (excess * excess).mean()
+
+
+def universal_attractor_penalty(
+    mu: torch.Tensor,
+    z: torch.Tensor,
+    z_ref: torch.Tensor,
+    gene_idx: torch.Tensor,
+    tau: float = 0.80,
+) -> torch.Tensor:
+    """V3C Phase 2 — penalise the batch-max per-gene mean alignment above ``tau``.
+
+    For each gene id ``g_i`` appearing in ``gene_idx``, compute the mean of
+    ``α(z, g)`` over rows with that gene. Take the max across genes. If it exceeds
+    τ, return ``relu(max_g ᾱ(g) − τ)²``.
+
+    This targets the audit's ``UNIVERSAL_ATTRACTOR_GENE`` flag: a single gene whose
+    mean alignment across all states approaches 1.0. The max (rather than mean) makes
+    the gradient focal on the dominant attractor.
+
+    Implementation note: we compute per-gene means via ``index_add_`` for differentiability
+    on small batches; this is O(B · D) and runs on the training device.
+    """
+    cos = _alignment_cosine(mu, z, z_ref)                     # (B,)
+    gene_idx_long = gene_idx.to(dtype=torch.long)
+    if gene_idx_long.numel() == 0:
+        return torch.zeros((), device=cos.device, dtype=cos.dtype)
+    # Aggregate per-gene sum and count via scatter-style index_add_.
+    n_genes_seen = int(gene_idx_long.max().item()) + 1
+    sums = torch.zeros(n_genes_seen, device=cos.device, dtype=cos.dtype)
+    counts = torch.zeros(n_genes_seen, device=cos.device, dtype=cos.dtype)
+    sums = sums.index_add(0, gene_idx_long, cos)
+    counts = counts.index_add(0, gene_idx_long, torch.ones_like(cos))
+    per_gene_mean = sums / counts.clamp(min=1.0)              # (n_genes_seen,)
+    # Mask out genes that did not appear in this batch (count = 0)
+    present = (counts > 0)
+    if not present.any():
+        return torch.zeros((), device=cos.device, dtype=cos.dtype)
+    max_mean = per_gene_mean[present].max()
+    excess = torch.relu(max_mean - float(tau))
+    return excess * excess
+
+
+def action_diversity_penalty(
+    mu: torch.Tensor,
+    tau_min: float = 0.0,
+) -> torch.Tensor:
+    """V3C Phase 2 — encourage across-batch variance of μ to stay ≥ ``tau_min``.
+
+    L_ad = relu(τ_min − mean(σ²(μ)))² where σ² is the per-dim variance of μ across the
+    batch. Default ``tau_min = 0`` keeps the term inert. Used (with λ_ad > 0 and a
+    nonzero tau_min) to discourage near-constant Δz predictions.
+    """
+    if mu.numel() == 0:
+        return torch.zeros((), device=mu.device, dtype=mu.dtype)
+    if mu.shape[0] < 2:
+        return torch.zeros((), device=mu.device, dtype=mu.dtype)
+    var = mu.var(dim=0, unbiased=False)                       # (D,)
+    mean_var = var.mean()
+    deficit = torch.relu(float(tau_min) - mean_var)
+    return deficit * deficit
+
+
 def composition_loss(
     model: PerturbationDynamicsModel,
     z_ctrl: torch.Tensor,

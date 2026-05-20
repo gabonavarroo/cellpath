@@ -88,6 +88,18 @@ dynamics:
   validate_every_n_epochs: 1
   num_workers: 0                      # set higher on cluster
 
+  # V3C Phase 2 — contraction-aware regularizers (default disabled).
+  # See artifacts_v3/v3c/interpretation/v3c_phase2_contraction_aware_spec.md §1 for math.
+  # When all λ_* = 0 (defaults), training is byte-identical to V2/V3 dynamics behavior.
+  contraction_aware:
+    enabled: false                      # master switch (also off when all λ_*=0)
+    lambda_excessive_alignment: 0.0     # λ_ea — weight on L_ea = mean(relu(cos(μ, z_ref−z) − τ_ea)²)
+    tau_excessive_alignment: 0.80       # τ_ea — alignment cap
+    lambda_universal_attractor: 0.0     # λ_ua — weight on L_ua = relu(max_g ᾱ(g) − τ_ua)²
+    tau_universal_attractor: 0.80       # τ_ua — per-gene max alignment cap
+    lambda_action_diversity: 0.0        # λ_ad — weight on L_ad = relu(τ_ad − var(μ).mean())² (default off)
+    tau_action_diversity: 0.0           # τ_ad — variance floor (default inert)
+
   # Gate (these thresholds match PHASES.md Phase 2)
   gate:
     margin_vs_noop_r2: 0.10

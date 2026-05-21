@@ -6,6 +6,89 @@
 
 ---
 
+## Session 2026-05-20-2100  (agent: research-lead, V3C Final Validation — 4-seed + Phase 3 + PPO Tuning)
+
+**Phase:** V3C follow-up validation — v2_aggressive 4-seed PPO_BCD validation, Phase 3 ensemble-disagreement audit, bounded PPO hyperparameter tuning, fair final comparison + addendum.
+
+**Status:** Complete. **Champion unchanged.** All three follow-up investigations support the existing v2_aggressive seed 42 default-config PPO_BCD as the PRIMARY champion (CHAMPION_TUNED_RESULT). No PPO tuning config supplants the default. Ensemble disagreement is state-dependent not action-dependent (reproduces V3B Phase 4 finding).
+
+### Stage 1 — v2_aggressive 4-seed validation
+
+Trained 2 new PPO_BCD checkpoints — seeds 1 and 7, 500k each, locked B+C+D, ε=p15=3.0193. Reused seeds 42, 0 from prior session.
+
+**Per-seed PPO_BCD at K=3/bin8-10/OOD (primary signal cell):**
+
+| Seed | PPO_BCD | greedy_dyn_3_fused | Δ |
+|---|---:|---:|---:|
+| 42 | **0.840** | 0.765 | +0.075 |
+| 0 | 0.705 | 0.765 | −0.060 |
+| 1 | **0.840** | 0.765 | +0.075 |
+| 7 | **0.840** | 0.765 | +0.075 |
+| 4-seed mean | 0.806 ± 0.068 | 0.765 | **+0.041 CI95 [−0.025, +0.107]** |
+
+**Verdict: `V2AGG_VARIANCE_BOUNDED`** — normal-CI includes zero, but 3/4 seeds robustly reproduce +0.075. Seed 0 is the lone outlier (lands on greedy_dyn_1's saturation point at 0.705). Distance preserved (mean_final_d 2.91 vs greedy 2.92) — **better than Track L's +0.173 regression at K=2/b8-10**.
+
+### Stage 2 — Phase 3 ensemble-disagreement audit
+
+Trained 2 new Track L-clone dynamics (seeds 0, 1; reused existing seed-42 Track L). All 3 members preserve prediction (val_pearson ≈ 0.620). Ensemble-disagreement audit on 300 OOD states × 105 genes:
+
+- overall σ across members: 0.0402
+- **action-dependence score** (var of σ across genes per state, averaged): **5.1e-5** (effectively zero)
+- action-dependence normalized: 0.031
+- top-gene entropy normalized: 0.406
+
+**Verdict: `ENSEMBLE_DIAGNOSTIC_ONLY`** — uncertainty is state-dependent, not action-dependent. **Reproduces V3B Phase 4 finding #2.** Ensembling does not unlock Variant D as action-discriminating. No PPO smoke run on ensemble (gating condition not met).
+
+### Stage 3 — PPO hyperparameter tuning grid
+
+Bounded grid on v2_aggressive seed 42 (locked B+C+D):
+
+| Config | K=3/b8-10 | K=3/b6-8 | K=2/b6-8 | mean_final_d K=3/b8-10 |
+|---|---:|---:|---:|---:|
+| **Default 500k (champion)** | **0.840** | 0.800 | 0.185 | 2.95 |
+| ent_coef=0.05 500k | 0.705 ⬇ | 0.840 ⬆ | 0.140 | 2.91 |
+| lr=1e-4 500k | 0.840 = | 0.745 ⬇ | 0.095 ⬇ | 2.90 |
+| 750k default | 0.705 ⬇ | 0.870 ⬆ | 0.170 | 2.94 |
+
+**Verdict: no PPO_TUNED_RESULT supplants the default.** Default IS the local PPO optimum on this dynamics field. Higher entropy and longer training both regress at K=3/b8-10 to the greedy_dyn_1 saturation point (0.705). Lower LR ties at K=3/b8-10 but loses ground elsewhere. No tuning improvement found.
+
+### Stage 4 / 5 — Champion unchanged, addendum written
+
+- Champion **unchanged**: v2_aggressive + PPO_BCD seed 42 default 500k (CHAMPION_TUNED_RESULT).
+- Manifest updated with 4-seed result, PPO tuning grid, ensemble audit, addendum link.
+- Closeout updated with §8 (ensemble) and §10b (follow-up validation) sections.
+- Leaderboard updated with 4-seed, tuning, and ensemble rows.
+- No changes to `RUN_FINAL_PIPELINE.md`, `Makefile`, or `scripts/run_final_v3c_pipeline.py` — default pipeline still runs the champion correctly.
+
+### Files written
+
+- `artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed{1,7}_500k/{ppo.zip, eval/, metadata.json, ...}`
+- `artifacts_v3/v3c/rl_tuning/v2agg_seed42_{ent005_500k, lr1e4_500k, 750k}/{ppo.zip, eval/, ...}`
+- `artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed{0,1}/{model.pt, gate.json, config.json, ...}`
+- `artifacts_v3/v3c/utility_audit/ensemble_track_l/disagreement_audit.json`
+- `scripts/audit_ensemble_disagreement.py`
+- `artifacts_v3/v3c/interpretation/v3c_final_addendum_phase3_ppo_tuning.md`
+- Updates: `artifacts_v3/v3c/final_champion_manifest.json`, `final_results_leaderboard.md`, `v3c_final_closeout.md`.
+
+### Tests + frozen tiers
+
+- **395 passed / 2 skipped** (no new tests; manifest tests still pass with new fields).
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` → clean.
+
+### Recommended next session
+
+1. **Moderate-τ contraction sweep** (τ ∈ {0.65, 0.70, 0.75}) — Phase 2.5 showed τ=0.80 too weak, τ=0.60 trades K=2 reach for K=3 un-saturation; intermediate might retain both.
+2. **N=5+ Track L seed ensemble** — current N=3 action-dependence is 5e-5; may grow with more members.
+3. **Architectural-diversity ensemble** (vary λ_corr, n_hidden across members instead of seeds only).
+4. **PPO early-stopping** keyed on K=3/b8-10/OOD — 750k regressed from 500k; checkpointing every 100k and selecting on held-out cell would harden the champion.
+5. **4-seed × 1M Phase 4 escalation on v2_aggressive** if compute allows.
+
+### Blockers
+
+None.
+
+---
+
 ## Session 2026-05-20-1900  (agent: research-lead, V3C Final Push — Phase 2.5 + Champion + Integration)
 
 **Phase:** V3C final-push session — Phase 2.5 contraction-aware variants (v2_aggressive, v3_diverse, v4_combo) → champion PPO_BCD smoke → champion selection → manifest + figures + closeout docs + Makefile entrypoints.

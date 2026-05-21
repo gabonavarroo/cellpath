@@ -88,6 +88,33 @@
         "delta_vs_greedy_dyn_3": 0.0075,
         "note": "Insufficient seeds for CI; seed-42 +0.075 is variance-bounded but represents the best single PPO-over-greedy delta achieved in V3 at a non-saturated cell."
       },
+      "primary_signal_4seed_validation": {
+        "seeds": [42, 0, 1, 7],
+        "ppo_bcd_per_seed_at_k3_b8-10": [0.840, 0.705, 0.840, 0.840],
+        "ppo_bcd_mean": 0.806,
+        "ppo_bcd_std": 0.068,
+        "delta_vs_greedy_dyn_3_per_seed": [0.075, -0.060, 0.075, 0.075],
+        "delta_vs_greedy_dyn_3_mean": 0.041,
+        "delta_vs_greedy_dyn_3_ci95_normal": [-0.025, 0.107],
+        "verdict": "V2AGG_VARIANCE_BOUNDED",
+        "note": "3 of 4 seeds (42, 1, 7) robustly reproduce +0.075 advantage; seed 0 is the outlier (0.705). 4-seed normal-CI half-width 0.066 just barely includes zero. Per-seed median Δ = +0.075. Distance-preserved (mean_final_distance 2.91 vs greedy 2.92, no regression — unlike Track L's +0.173)."
+      },
+      "ppo_tuning_grid_seed42": {
+        "default_500k": {"k3_b8-10": 0.840, "verdict": "champion (best)"},
+        "ent_coef_0.05_500k": {"k3_b8-10": 0.705, "verdict": "regression: higher entropy loses signal"},
+        "lr_1e-4_500k": {"k3_b8-10": 0.840, "verdict": "tied with default at K=3/b8-10; worse on K=3/b6-8"},
+        "default_750k": {"k3_b8-10": 0.705, "verdict": "regression: longer training drifts policy back to greedy_dyn_1-saturation"},
+        "conclusion": "Default config IS the local PPO optimum; no PPO_TUNED_RESULT supplants the champion."
+      },
+      "phase3_ensemble_disagreement_audit": {
+        "n_members": 3,
+        "members": ["dynamics_n64_legacy_ror_corr010", "v3c/dynamics_ensemble/track_l_clone_seed0", "v3c/dynamics_ensemble/track_l_clone_seed1"],
+        "overall_disagreement_sigma": 0.0402,
+        "action_dependence_score": 5.1e-05,
+        "action_dependence_normalized": 0.031,
+        "verdict": "ENSEMBLE_DIAGNOSTIC_ONLY",
+        "note": "Ensemble disagreement is state-dependent not action-dependent (var of σ across genes per state = 5e-5). Reproduces V3B Phase 4 finding that single-head σ is state-dependent only. Ensembling does not unlock Variant D as action-discriminating."
+      },
       "audit_K2_b8-10_reach_at_p15": 0.000,
       "audit_K3_b8-10_reach_at_p15": 0.630,
       "audit_K3_b8-10_greedy_dyn_1_distance": 0.705,
@@ -195,6 +222,7 @@
     "v3c_phase1_smoke": "artifacts_v3/v3c/interpretation/v3c_phase1_ppo_smoke_summary.md",
     "v3c_phase4_escalation": "artifacts_v3/v3c/interpretation/v3c_phase4_track_ln_escalation.md",
     "v3c_phase2_v1": "artifacts_v3/v3c/interpretation/v3c_phase2_contraction_aware_summary.md",
-    "v3c_phase2_5": "artifacts_v3/v3c/interpretation/v3c_phase2_5_contraction_aware_summary.md"
+    "v3c_phase2_5": "artifacts_v3/v3c/interpretation/v3c_phase2_5_contraction_aware_summary.md",
+    "v3c_final_addendum": "artifacts_v3/v3c/interpretation/v3c_final_addendum_phase3_ppo_tuning.md"
   }
 }

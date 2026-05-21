@@ -40,6 +40,11 @@ All trained with the locked B+C+D reward stack at per-VAE p15. Single-seed (seed
 | **contraction_aware_v2_aggressive seed 42 (500k) at K=3/b8-10** | **0.840** | 0.705 (g_2) / **0.765** (g_3) | **+0.135** (vs g_2) / **+0.075** (vs g_3) | n/a (K=3 fully reached) | **CANDIDATE_SIGNAL_RAW** (single-seed) |
 | contraction_aware_v2_aggressive seed 0 (500k) at K=3/b8-10 | 0.705 | 0.705 (g_2) / 0.765 (g_3) | 0.0 / −0.060 | n/a | variance check — seed 42 advantage not reproduced |
 | contraction_aware_v2_aggressive 2-seed mean at K=3/b8-10 | 0.7725 ± 0.095 | 0.765 (g_3) | +0.0075 (tied within variance) | n/a | TUNED candidate; 4-seed Phase 4 needed |
+| **contraction_aware_v2_aggressive 4-seed at K=3/b8-10** (seeds 42, 0, 1, 7) | **0.806 ± 0.068** | 0.765 (g_3) | **+0.041 CI95 [-0.025, +0.107]** | distance preserved | **V2AGG_VARIANCE_BOUNDED**: 3/4 seeds at 0.840; seed 0 outlier 0.705 |
+| v2_aggressive PPO tuning: ent_coef=0.05 seed42 500k | 0.705 | 0.765 (g_3) | -0.060 | 2.91 | PPO_TUNED regression; default IS optimum |
+| v2_aggressive PPO tuning: lr=1e-4 seed42 500k | 0.840 | 0.765 (g_3) | +0.075 | 2.90 | matches default at K=3/b8-10 but loses K=3/b6-8 |
+| v2_aggressive PPO tuning: 750k seed42 | 0.705 | 0.765 (g_3) | -0.060 | 2.94 | PPO_TUNED regression with longer training |
+| Phase 3 ensemble (3 Track L seeds) audit | n/a | n/a | n/a | n/a | **ENSEMBLE_DIAGNOSTIC_ONLY**: action_dep score = 5e-5 (state-dep only, reproduces V3B Phase 4) |
 | mean_delta_corr_010 (seed 42 500k) | 0.000 | 0.000 | 0.000 | n/a | `NO_SIGNAL` (NOOP-strategy) |
 
 ## 3. Champion selection

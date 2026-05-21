@@ -88,9 +88,11 @@ V3C Phase 2 added three additive regularizers to `dynamics.contraction_aware.*` 
 
 Seed 42 represents **the best single PPO−greedy delta achieved in V3 at a non-saturated cell**. Seed 0 doesn't reproduce: the advantage is variance-bounded, not multi-seed-confirmed. The pattern echoes Track N at 500k (seed-42 +0.075 → 4-seed CI included zero), suggesting that small-pool cells (n≈8) at K≥3 produce large between-seed variance. A 4-seed Phase 4 escalation on v2_aggressive is the natural next step.
 
-## 8. Ensemble-disagreement (deferred)
+## 8. Ensemble-disagreement (Phase 3, follow-up session)
 
-Skipped this session because v2_aggressive PPO_BCD seed 42 surfaced as a CANDIDATE_SIGNAL_RAW, making ensemble-disagreement the lower-priority alternative path. Documented in §11 future work — ensemble of 3–5 dynamics models with different seeds remains the most promising orthogonal axis for action-dependent uncertainty (the missing piece for Variant D's reward to be load-bearing per V3B Phase 4 finding #2).
+A 3-member ensemble of Track L-clone dynamics models (seeds 42, 0, 1; same architecture, same VAE/pairs) was trained and audited in a follow-up session. Result: **`ENSEMBLE_DIAGNOSTIC_ONLY`**. Overall disagreement σ across members = 0.0402, but action-dependence score (var of σ across genes within each state) = **5.1e-5** — effectively zero. The ensemble reproduces V3B Phase 4 finding #2: uncertainty on this dynamics field is **state-dependent, not action-dependent**, and ensembling does not unlock Variant D as action-discriminating. See `v3c_final_addendum_phase3_ppo_tuning.md` §2.
+
+Per-member prediction sanity is preserved (all val_pearson ≈ 0.620, ood_pearson ≈ 0.510–0.515). Ensembling does not damage prediction; it simply does not add the action-axis signal that V3B Phase 4 hoped for. Future work directions: larger N≥5 ensemble, or architectural diversity (vary λ_corr / n_hidden / n_layers across members instead of seed only).
 
 ## 9. Final champion
 
@@ -117,6 +119,13 @@ See `final_champion_selection.md` for the full interpretive rationale.
 **The reward axis is closed** (V3B locked). The **dynamics axis has a promising lever** (Phase 2 v2_aggressive) but needs multi-seed validation. **Representation reformulation** (SCANVI / ZINB / ensemble-disagreement) is out-of-scope for V3C but is the documented future direction.
 
 **What this is NOT**: not therapeutic-reprogramming (target = unperturbed-K562 NT centroid, in-silico steering); not biological discovery (Bucket-A wins use Chronos labels that also appear in the reward); not multi-seed-stable positive signal.
+
+## 10b. Follow-up validation (v2_aggressive 4-seed + PPO tuning)
+
+A follow-up session ran:
+- **4-seed validation** of v2_aggressive PPO_BCD at 500k (added seeds 1, 7 to the existing 42, 0). Per-seed at K=3/b8-10/OOD: `[0.840, 0.705, 0.840, 0.840]`. 4-seed mean 0.806 ± 0.068, Δ vs greedy_dyn_3 = +0.041, CI95 [-0.025, +0.107]. Verdict: **`V2AGG_VARIANCE_BOUNDED`** — CI includes zero but 3/4 seeds reproduce +0.075. Distance preserved (mean_final_d 2.91 vs greedy 2.92, no regression — better than Track L's +0.173).
+- **PPO hyperparameter tuning** grid on seed 42 (ent_coef, lr, total_timesteps). **No tuned config beats the default at K=3/b8-10/OOD.** Default is the local PPO optimum.
+- Champion **unchanged**. See `v3c_final_addendum_phase3_ppo_tuning.md` for full data.
 
 ## 11. Future work
 

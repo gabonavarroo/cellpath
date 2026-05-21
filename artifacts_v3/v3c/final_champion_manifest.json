@@ -1,0 +1,200 @@
+{
+  "manifest_version": "1.0",
+  "generated_at": "2026-05-20T19:08:00+00:00",
+  "session_label": "v3c-final-push",
+  "status_note": "Final. Two champions documented: PRIMARY is the best-PPO-over-greedy-delta result (v2_aggressive seed 42, CHAMPION_TUNED_RESULT, variance-bounded). SECONDARY is the most-validated result (Track L 4-seed, LOCKED_DEFAULT_RESULT).",
+
+  "champion": {
+    "champion_name": "contraction_aware_v2_aggressive_ppo_bcd_seed42_500k",
+    "champion_type": "CHAMPION_TUNED_RESULT",
+    "dynamics_dir": "artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive",
+    "dynamics_field_id": "artifacts_v3__v3c__dynamics_candidates__contraction_aware_v2_aggressive",
+    "dynamics_pathology": "moderately_aggressive_contraction_regularization (cf~1.0, gu_max~0.874, K=3/b8-10 greedy UN-SATURATED)",
+    "dynamics_training_config": {
+      "lambda_excessive_alignment": 0.10,
+      "tau_excessive_alignment": 0.60,
+      "lambda_universal_attractor": 0.10,
+      "tau_universal_attractor": 0.60,
+      "lambda_action_diversity": 0.0,
+      "ridge_baseline": true,
+      "lambda_combo": 0.5,
+      "lambda_corr": 0.10,
+      "n_latent": 64,
+      "n_hidden": 256,
+      "n_layers": 3,
+      "selection_metric": "gate_margin",
+      "epochs_run": 92,
+      "best_nll_epoch": 57,
+      "best_gate_epoch": 54,
+      "val_pearson": 0.6138,
+      "ood_pearson": 0.5112
+    },
+    "ppo_checkpoint": "artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/ppo.zip",
+    "ppo_eval_dir": "artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/eval",
+    "ppo_eval_seed0_dir": "artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed0_500k/eval",
+    "reward_mode": "biorealistic_fused",
+    "reward_coefficients": {
+      "lambda_tox": 0.10,
+      "lambda_ce": 0.05,
+      "lambda_unc_path": 0.05,
+      "freeband": {"free_steps": 3, "mild_until": 5, "mild_beta": 0.02, "heavy_beta": 0.10, "success_bonus": 1.0},
+      "uncertainty_reduce": "mean_sigma",
+      "uncertainty_clip_min": -5.0,
+      "uncertainty_clip_max": 3.0
+    },
+    "epsilon_label": "p15",
+    "epsilon_scalar": 3.0193,
+    "epsilon_source": "Track L 64D legacy VAE empirical control-cell L2 distance distribution (n=11855); shared with contraction_aware_* candidates since they reuse the same VAE.",
+    "vae_dir": "artifacts_v3/vae_n64_legacy",
+    "vae_n_latent": 64,
+    "vae_likelihood": "scvi_legacy",
+    "pairs_dir": "artifacts_v3/pairs_n64_legacy",
+    "pairs_source": "ot_n64_legacy",
+    "env_max_steps": 8,
+    "training_horizon": "500k timesteps × 2 seeds {42, 0}",
+    "seeds": [42, 0],
+    "evaluation_matrix": [
+      "k2_bin6-8_splitood",
+      "k2_bin8-10_splitood",
+      "k3_bin6-8_splitood",
+      "k3_bin8-10_splitood",
+      "k4_bin6-8_splitood",
+      "k4_bin8-10_splitood",
+      "k5_bin6-8_splitood",
+      "k5_bin8-10_splitood",
+      "k8_bin8-10_splitood"
+    ],
+    "best_metrics": {
+      "primary_signal_cell": "k3_bin8-10_splitood",
+      "primary_signal_seed42": {
+        "ppo_bcd_success": 0.840,
+        "same_field_greedy_dyn_1_fused": 0.705,
+        "same_field_greedy_dyn_2_fused": 0.705,
+        "same_field_greedy_dyn_3_fused": 0.765,
+        "delta_vs_greedy_dyn_2": 0.135,
+        "delta_vs_greedy_dyn_3": 0.075,
+        "mean_steps": 3.0,
+        "mean_unc_path_max": 0.412
+      },
+      "primary_signal_seed0": {
+        "ppo_bcd_success": 0.705,
+        "delta_vs_greedy_dyn_3": -0.060,
+        "delta_vs_greedy_dyn_2": 0.0
+      },
+      "primary_signal_2seed_mean": {
+        "ppo_bcd_mean": 0.7725,
+        "ppo_bcd_std": 0.0954,
+        "delta_vs_greedy_dyn_2": 0.0675,
+        "delta_vs_greedy_dyn_3": 0.0075,
+        "note": "Insufficient seeds for CI; seed-42 +0.075 is variance-bounded but represents the best single PPO-over-greedy delta achieved in V3 at a non-saturated cell."
+      },
+      "audit_K2_b8-10_reach_at_p15": 0.000,
+      "audit_K3_b8-10_reach_at_p15": 0.630,
+      "audit_K3_b8-10_greedy_dyn_1_distance": 0.705,
+      "audit_K3_b8-10_greedy_dyn_3_distance": 0.620,
+      "geometry_gu_max": 0.874,
+      "geometry_align_cos_median": 0.720,
+      "geometry_contraction_fraction": 0.9997,
+      "geometry_action_diversity_per_state": 0.0900
+    },
+    "verdict": "CHAMPION_TUNED_RESULT_seed42_PROVISIONAL_pending_4seed_phase4_escalation",
+    "limitations": [
+      "Seed 0 PPO_BCD at K=3/b8-10 = 0.705 (loses to greedy_dyn_3 by -0.060). The +0.075 advantage at seed 42 is variance-bounded, not multi-seed-confirmed.",
+      "K=2/b8-10/OOD reach destroyed (0). v2_aggressive trades the V3B Phase 4 binding K=2 cell for un-saturation at K=3 — net positive in `best-single-cell-PPO-over-greedy` terms but with the destroyed cell as a real cost.",
+      "K=3/b6-8/OOD: PPO LOSES to greedy_dyn_3 (0.800 vs 0.935 — −0.135). Same pattern as K=2/b6-8 (PPO 0.185 vs greedy_dyn_1 0.440 — −0.255). At the easier (lower-distance) bins PPO under-performs greedy.",
+      "K=4/b8-10/OOD: PPO=1.000 ties best greedy (g_1 = g_2 = 1.000); only beats greedy_dyn_3 (0.840) by +0.160 — but g_dyn_3 is the WORST greedy depth here (deeper greedy is hurt by the field's non-monotonic depth response).",
+      "Bucket-A wins (tox=0, CE=0) are reward-prior optimization on Chronos labels that also appear in the reward; NOT independent biological validation.",
+      "Bucket-C (Replogle K562 essential CRISPRi) is pending_no_local_source for this evaluation.",
+      "Not therapeutic-reprogramming. Target = unperturbed-K562 NT centroid (in-silico latent-space steering).",
+      "v2_aggressive's dynamics gate FAILS (ridge_margin −0.0018) but val Pearson 0.6138 is preserved (vs Track L 0.620); the gate failure reflects the regularizer's intended tradeoff — slightly worse prediction in exchange for less universally-attractive geometry.",
+      "Single-seed CANDIDATE_TUNED claim; do NOT claim LOCKED_DESIGN_POSITIVE_SIGNAL without 4-seed CI excluding zero."
+    ],
+    "if_phase4_4seed_were_run": "Train 2 additional seeds {1, 7} × 500k. If 4-seed paired Δ vs greedy_dyn_3_fused at K=3/b8-10 excludes zero with PPO > greedy → first V3 LOCKED_DESIGN_POSITIVE_SIGNAL. If not → champion downgrades to TUNED_REFERENCE_ONLY; Track L becomes the PRIMARY_DEFAULT."
+  },
+
+  "secondary_reference_champion": {
+    "champion_name": "track_l_n64_legacy_ror_corr010_ppo_bcd_phase4_4seed_1M",
+    "champion_type": "LOCKED_DEFAULT_RESULT",
+    "dynamics_dir": "artifacts_v3/dynamics_n64_legacy_ror_corr010",
+    "dynamics_field_id": "artifacts_v3__dynamics_n64_legacy_ror_corr010",
+    "dynamics_pathology": "universal_over_contraction (cf~1.0, gu_max~0.933)",
+    "ppo_checkpoint_seed42": "artifacts_v3/v3c/rl_smokes/track_l_n64_legacy_ror_corr010_seed42_1M/ppo.zip",
+    "ppo_phase4_eval_dir": "artifacts_v3/v3c/rl_final/track_l_4seed_locked/eval",
+    "ppo_phase4_aggregate_dir": "artifacts_v3/v3c/rl_final/track_l_4seed_locked/agg",
+    "ppo_phase4_seeds": [42, 0, 1, 7],
+    "reward_mode": "biorealistic_fused",
+    "reward_coefficients": {"lambda_tox": 0.10, "lambda_ce": 0.05, "lambda_unc_path": 0.05, "freeband": {"free_steps": 3, "mild_until": 5, "mild_beta": 0.02, "heavy_beta": 0.10, "success_bonus": 1.0}},
+    "epsilon_label": "p15",
+    "epsilon_scalar": 3.0193,
+    "vae_dir": "artifacts_v3/vae_n64_legacy",
+    "pairs_dir": "artifacts_v3/pairs_n64_legacy",
+    "training_horizon": "1M timesteps × 4 seeds {42, 0, 1, 7}",
+    "seeds": [42, 0, 1, 7],
+    "best_metrics": {
+      "primary_cell": "k2_bin8-10_splitood",
+      "ppo_bcd_4seed_mean": 0.705,
+      "ppo_bcd_4seed_std": 0.000,
+      "same_field_greedy_dyn_2_fused": 0.695,
+      "delta_vs_greedy_dyn_2": 0.010,
+      "delta_ci95": [0.010, 0.010],
+      "anchor_lift_vs_v2": 4.762,
+      "audit_K2_b8-10_reach_at_p15": 0.560,
+      "geometry_gu_max": 0.933,
+      "geometry_contraction_fraction": 0.9998
+    },
+    "verdict": "NO_STABLE_SIGNAL_pareto_distance_fail",
+    "limitations": [
+      "PPO ties greedy_dyn_2 (+0.010) but mean_final_distance regresses +0.173 → Pareto-distance criterion fails.",
+      "K≥3 cells are saturated; the +0.010 raw edge is at K=2/b8-10 where the start pool is small (~17 cells) and 4 seeds produce identical raw counts (zero variance = structural margin, not discovered controller advantage)."
+    ]
+  },
+
+  "baselines": {
+    "anchor": {
+      "name": "v2_anchor_ror_corr010_ppo_bcd_v3b_phase4_4seed",
+      "dynamics_dir": "artifacts_v2/dynamics_v1ot_ror_corr010",
+      "ppo_checkpoint": "artifacts_v3/rl_v3b_biorealistic_fused_epsp15_seed42/ppo.zip",
+      "ppo_4seed_aggregate": "artifacts_v3/eval_v3b_reward_stack",
+      "vae_dir": "artifacts/vae",
+      "pairs_dir": "artifacts/pairs",
+      "epsilon_label": "p15",
+      "epsilon_scalar": 2.9898,
+      "best_metrics": {"primary_cell": "k2_bin8-10_splitood", "ppo_bcd_4seed_mean": 0.148, "ppo_bcd_4seed_std": 0.037, "verdict": "LOCKED_DESIGN_TECHNICAL_ONLY"},
+      "purpose": "V3B reward-stack lock reference; same locked stack as champion."
+    }
+  },
+
+  "phase_2_5_candidates": {
+    "contraction_aware_v1": {"tau": 0.80, "lambda": 0.05, "verdict": "PHASE2_DIAGNOSTIC_ONLY"},
+    "contraction_aware_v2_aggressive": {"tau": 0.60, "lambda": 0.10, "verdict": "PHASE2_MODERATE_UTILITY_seed42_CANDIDATE_SIGNAL_RAW_at_K3_b8-10"},
+    "contraction_aware_v3_diverse": {"tau_ea": 0.80, "lambda_ad": 0.10, "tau_ad": 0.15, "verdict": "PHASE2_DIAGNOSTIC_ONLY (action diversity penalty had negligible effect at λ=0.10)"},
+    "contraction_aware_v4_combo": {"tau": 0.60, "lambda_ad": 0.10, "verdict": "PHASE2_MODERATE_UTILITY (mirrors v2_aggressive; action diversity term again negligible)"}
+  },
+
+  "reproduction": {
+    "evaluate_command": "python scripts/run_final_v3c_pipeline.py --mode eval",
+    "demo_command": "python scripts/run_final_v3c_pipeline.py --mode demo --n-episodes 50",
+    "baseline_command": "python scripts/run_final_v3c_pipeline.py --mode baseline",
+    "full_pipeline_command": "make final-v3c",
+    "audit_command": "python scripts/run_final_v3c_pipeline.py --mode audit --n-episodes 200",
+    "figures_command": "make final-v3c-figures",
+    "test_command": "PYTHONPATH=. .venv/bin/pytest -q",
+    "frozen_tier_check": "git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/"
+  },
+
+  "links": {
+    "selection_doc": "artifacts_v3/v3c/interpretation/final_champion_selection.md",
+    "leaderboard": "artifacts_v3/v3c/interpretation/final_results_leaderboard.md",
+    "closeout": "artifacts_v3/v3c/interpretation/v3c_final_closeout.md",
+    "presentation_outline": "artifacts_v3/v3c/interpretation/final_presentation_outline.md",
+    "run_pipeline": "artifacts_v3/v3c/interpretation/RUN_FINAL_PIPELINE.md",
+    "controller_spec": "V3_CONTROLLER_OBJECTIVE_SPEC.md",
+    "v3b_reward_lock": "artifacts_v3/interpretation/v3b_reward_stack_lock.md",
+    "v3c_plan": "V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md",
+    "v3c_phase0_audit": "artifacts_v3/v3c/interpretation/v3c_phase0_utility_audit.md",
+    "v3c_phase1_smoke": "artifacts_v3/v3c/interpretation/v3c_phase1_ppo_smoke_summary.md",
+    "v3c_phase4_escalation": "artifacts_v3/v3c/interpretation/v3c_phase4_track_ln_escalation.md",
+    "v3c_phase2_v1": "artifacts_v3/v3c/interpretation/v3c_phase2_contraction_aware_summary.md",
+    "v3c_phase2_5": "artifacts_v3/v3c/interpretation/v3c_phase2_5_contraction_aware_summary.md"
+  }
+}

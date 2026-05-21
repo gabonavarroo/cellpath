@@ -9,7 +9,29 @@ DOCKER ?= docker
 
 .PHONY: help setup data vae pairs dynamics rl evaluate pipeline test lint format \
         docker-build docker-cpu docker-cuda tensorboard clean nuke notebooks \
-        rl-eval rl-random rl-summary aggregate visualize depmap-compare
+        rl-eval rl-random rl-summary aggregate visualize depmap-compare \
+        final-v3c final-v3c-eval final-v3c-demo final-v3c-baseline final-v3c-figures final-v3c-audit
+
+# ---------------------------------------------------------------------------
+# V3C final pipeline (champion-default — cheap eval, NOT retraining)
+# ---------------------------------------------------------------------------
+
+final-v3c-eval:  ## Re-run champion 7-cell evaluation (cheap, ~10 min).
+	$(PYTHON) scripts/run_final_v3c_pipeline.py --mode eval
+
+final-v3c-demo:  ## Fast 1-cell champion demo (~2 min).
+	$(PYTHON) scripts/run_final_v3c_pipeline.py --mode demo --n-episodes 50
+
+final-v3c-baseline:  ## Re-run V2 anchor baseline for side-by-side.
+	$(PYTHON) scripts/run_final_v3c_pipeline.py --mode baseline
+
+final-v3c-figures:  ## Regenerate presentation figures from existing aggregator outputs.
+	$(PYTHON) scripts/run_final_v3c_pipeline.py --mode figures
+
+final-v3c-audit:  ## Re-run V3C utility audit on champion dynamics field.
+	$(PYTHON) scripts/run_final_v3c_pipeline.py --mode audit
+
+final-v3c: final-v3c-eval final-v3c-figures  ## Default: champion eval + figures.
 
 help:  ## Show this help message.
 	@grep -E '^[a-zA-Z_-]+:.*?##' Makefile | awk -F':.*?## ' '{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

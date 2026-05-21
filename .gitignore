@@ -243,3 +243,9 @@ __marimo__/
 /artifacts_v3/v3c/*
 !/artifacts_v3/v3c/interpretation
 !/artifacts_v3/v3c/figures
+!/artifacts_v3/v3c/final_champion_manifest.json
+!/artifacts_v3/v3c/utility_audit
+/artifacts_v3/v3c/utility_audit/*
+!/artifacts_v3/v3c/utility_audit/*.md
+!/artifacts_v3/v3c/utility_audit/*.csv
+!/artifacts_v3/v3c/utility_audit/dynamics_inventory.csv

@@ -1,0 +1,109 @@
+# @package _global_
+# config/experiments/final.yaml
+#
+# CellPath final model composition (V3C champion).
+#
+# Final model identity (per artifacts_v3/v3c/final_champion_manifest.json):
+#   Champion: contraction_aware_v2_aggressive  +  PPO_BCD seed 42 500k
+#   Type    : CHAMPION_TUNED_RESULT (variance-bounded)
+#   VAE     : 64-D scVI legacy (Track L)        → artifacts_v3/vae_n64_legacy/
+#   Pairs   : OT pairs on the 64-D VAE          → artifacts_v3/pairs_n64_legacy/
+#   Dynamics: contraction-aware τ=0.60          → artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/
+#   PPO     : biorealistic_fused (B+C+D) reward → artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/
+#
+# Usage:
+#   make pipeline-final         # python -m src.pipeline run --config-name final
+#   make eval-final             # only the eval step (no retraining)
+#   python -m src.pipeline run --config-name final --dry-run
+#
+# IMPORTANT — required artifacts on disk to actually run end-to-end:
+#   • artifacts_v3/vae_n64_legacy/{latents.h5ad, z_reference_centroid.npy, gene_vocab.json}
+#   • artifacts_v3/pairs_n64_legacy/{train_pairs.npz, val_pairs.npz, ood_pairs.npz}
+#   • artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/{model.pt, config.json}
+#   • artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/ppo.zip
+# If any are missing, the pipeline step will skip cleanly (because each step is idempotent
+# and checks for its target artifact's existence). To regenerate the champion from scratch
+# you need to also rebuild the 64-D VAE; that is documented in docs/plans/V3A_LATENT_AUDIT_AND_64D_PLAN.md.
+
+defaults:
+  - /default
+  - _self_
+
+experiment:
+  id: final
+  description: "V3C champion — contraction_aware_v2_aggressive + PPO_BCD seed 42 500k."
+
+# Re-route every path that differs between V2 default and the V3C champion.
+paths:
+  # Background latents (Track L 64-D scVI)
+  vae_dir:                 ${paths.v3_legacy_vae_dir}
+  vae_latents_h5ad:        ${paths.v3_legacy_vae_latents}
+  vae_z_reference_centroid: ${paths.v3_legacy_vae_centroid}
+  vae_epsilon_success_json: ${paths.v3_legacy_vae_eps}
+  vae_gene_vocab_json:     ${paths.v3_legacy_vae_gene_vocab}
+
+  # OT pairs on the 64-D VAE
+  pairs_dir:               ${paths.v3_legacy_pairs_dir}
+  pairs_train:             ${paths.v3_legacy_pairs_dir}/train_pairs.npz
+  pairs_val:               ${paths.v3_legacy_pairs_dir}/val_pairs.npz
+  pairs_ood:               ${paths.v3_legacy_pairs_dir}/ood_pairs.npz
+  pairs_combo:             ${paths.v3_legacy_pairs_dir}/combo_pairs.npz
+  pairs_metadata:          ${paths.v3_legacy_pairs_dir}/metadata.json
+
+  # Champion dynamics (contraction-aware v2_aggressive)
+  dynamics_dir:            ${paths.artifacts_v3}/v3c/dynamics_candidates/contraction_aware_v2_aggressive
+  dynamics_model:          ${paths.dynamics_dir}/model.pt
+  dynamics_config:         ${paths.dynamics_dir}/config.json
+  dynamics_gate:           ${paths.dynamics_dir}/gate.json
+
+  # Champion PPO (biorealistic_fused, seed 42, 500k ts)
+  rl_dir:                  ${paths.artifacts_v3}/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k
+  rl_ppo_zip:              ${paths.rl_dir}/ppo.zip
+  rl_action_freq_json:     ${paths.rl_dir}/action_freq.json
+
+  # Eval outputs of the final composition live alongside the V3C figures
+  eval_dir:                ${paths.artifacts_v3}/v3c/eval_final
+  eval_figures_dir:        ${paths.artifacts_v3}/v3c/figures
+
+# VAE composition: 64-D NB (Track L)
+vae:
+  n_latent: 64
+
+# Dynamics composition: residual-over-ridge + correlation loss + contraction-aware regularizers
+# (τ = 0.60, λ_ea = λ_ua = 0.10).  Default-off in dynamics.yaml; turned on here.
+dynamics:
+  use_state_linear_skip: false
+  use_residual_over_ridge: true
+  lambda_corr: 0.10
+  contraction_aware:
+    enabled: true
+    lambda_excessive_alignment: 0.10
+    tau_excessive_alignment: 0.60
+    lambda_universal_attractor: 0.10
+    tau_universal_attractor: 0.60
+    lambda_action_diversity: 0.0
+    tau_action_diversity: 0.0
+
+# RL composition: locked biorealistic reward stack (B+C+D), per-VAE p15 ε for Track L = 3.0193
+rl:
+  env:
+    max_steps: 8
+    epsilon_override: 3.0193        # Track L p15 (per v3c_phase1_ppo_smoke_summary §2)
+  reference:
+    epsilon_percentile: 15
+  reward:
+    mode: biorealistic_fused
+    lambda_tox: 0.10
+    lambda_ce: 0.05
+    lambda_unc_path: 0.05
+    safety_table_path: artifacts_v3/v3b_biology/gene_safety.parquet
+    freeband:
+      free_steps: 3
+      mild_until: 5
+      mild_beta: 0.02
+      heavy_beta: 0.10
+      success_bonus: 1.0
+  ppo:
+    total_timesteps: 500_000        # champion checkpoint is at 500k
+  train:
+    skip_gate: true                  # documented in CLAUDE.md §3 rule 9

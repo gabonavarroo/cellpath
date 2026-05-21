@@ -18,7 +18,7 @@ CellPath frames cancer cell-state steering as an MDP:
 
 | Element | Choice |
 |---|---|
-| **State** | 32-dim scVI latent of K562 CRISPRa Perturb-seq |
+| **State** | 64-dim scVI latent of K562 CRISPRa Perturb-seq |
 | **Action** | `Discrete(N_genes + 1)` — one per single-gene CRISPRa target (≈106) + NO-OP |
 | **Transition** | Residual MLP `f_θ(z, gene) → (μ_Δz, log σ²_Δz)` with heteroscedastic NLL |
 | **Reward** | distance-to-centroid + sparsity penalty (plus optional safety / freeband / uncertainty terms) |

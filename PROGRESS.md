@@ -6,6 +6,51 @@
 
 ---
 
+## Session 2026-05-21-0200  (agent: research-lead, V3C Final Replogle Held-out Audit)
+
+**Phase:** V3C Bucket-C — post-hoc Replogle 2022 K562 essential CRISPRi held-out action-overlap audit for the final V3C champion (contraction_aware_v2_aggressive + PPO_BCD seed 42 500k). No retraining; no PPO/dynamics/VAE training; no SCANVI/ZINB; no biological discovery claims.
+
+**Status:** Complete (commit deferred to user). Champion unchanged. Replogle source re-downloaded from Harmonizome 3.0 (`reploglek562essential` slug), Phase 2c counts reproduced exactly (1875 essentials, 6 in Norman 105 — FOXL2/KIF18B/NCL/PLK4/SET/STIL; 4 Replogle-only — FOXL2/KIF18B/NCL/SET). Action-overlap audit run against 4-seed champion, Track L 4-seed, and V2 anchor.
+
+### Headline finding
+
+**`V3C_REPLOGLE_HELDOUT_AUDIT_INCONCLUSIVE_CHAMPION_USES_FOXL2`.**
+
+At the discriminating cell (K=3/bin8-10/OOD), champion seed 42 selects FOXL2 in 32 of 600 actions (frac_Replogle-only = 0.0533, ×1.40 random expectation). Same-field greedy_dyn_3_fused picks FOXL2 in 23 of 600 (frac 0.0383, ×1.01). Same-field greedy_dyn_{1,2}_fused pick 0. Seeds 0, 1, 7 PPO_BCD: each selects 0 Replogle-only essentials; seeds 1 and 7 reproduce the seed-42 success rate (0.840) *without* FOXL2. 4-seed mean frac_Replogle-only = 0.0133, CI95 [-0.013, +0.040] (straddles zero AND the random expectation 0.0381). DepMap-essential frac = 0 across every PPO_BCD eval on this field (safety prior structurally satisfied within the reward).
+
+**Interpretation.** The seed-42 +0.075 advantage is mediated by aggressive FOXL2 selection — a Replogle-essential gene NOT in the DepMap reward. The mechanism is not load-bearing for the policy class (seeds 1, 7 don't use it) but IS load-bearing for the specific seed-42 checkpoint we ship. Track L 4-seed (LOCKED_DEFAULT secondary) is cleaner — 0 Replogle-only selections across all 4 seeds at its primary cell.
+
+### Stage outputs
+
+| Stage | Deliverable |
+|---|---|
+| 1 Availability | `artifacts_v3/v3c/interpretation/v3c_replogle_availability_check.md` — classified as `gene-set/signature only`. |
+| 2 Download | `scripts/download_replogle_heldout.py`; raw .gz under `data/raw/replogle/` (~5 MB, gitignored); processed JSON/CSV under `data/processed/replogle/` (small, tracked). |
+| 3 Gene sets | Phase 2c counts reproduced exactly. Replogle-only = {FOXL2, KIF18B, NCL, SET}. |
+| 4 Audit | `scripts/audit_v3c_replogle_heldout.py`; `artifacts_v3/v3c/replogle_heldout_action_overlap.csv` (277 rows); `artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit_metrics.json`. |
+| 5 Feasibility | `artifacts_v3/v3c/interpretation/v3c_replogle_single_cell_feasibility.md` — single-cell state-side probe NOT feasible (CRISPRa↔CRISPRi modality, gene-panel/batch mismatch). |
+| 6 Report + figure | `artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit.md`; `artifacts_v3/v3c/figures/replogle_heldout_action_overlap.png`. |
+| 7 Repro / docs | Manifest limitations + links updated; RUN_FINAL_PIPELINE.md §9b added; .gitignore additive entries for replogle artifacts; v3c_final_closeout.md §10a added. |
+
+### Tests + frozen tiers
+
+- `pytest tests/test_final_champion_manifest.py -q` → 3 passed.
+- Full `pytest -q` → **395 passed / 2 skipped**, unchanged from prior session.
+- `git status -- artifacts/ artifacts_64/ artifacts_v2/ artifacts/rl_sweeps/` → clean.
+
+### Recommended next session
+
+1. **OGEE v3 essentiality flags** as an additional independent prior on the action-overlap audit (extends Bucket-C without needing single-cell data).
+2. **Per-cell Replogle-only enrichment heatmap** for the presentation figure pack (champion vs greedy across all 9 cells × 5 policies).
+3. **CRISPRi action-space extension** (per `DATA.md` §7 future work) — would unlock the *state-side* held-out test that Stage 5 rules out under V3C constraints.
+4. Optional sanity: confirm OGEE / COSMIC CGC do not put FOXL2 in their K562 essential set (would help reframe the FOXL2 finding as cell-line specific).
+
+### Blockers
+
+None.
+
+---
+
 ## Session 2026-05-20-2100  (agent: research-lead, V3C Final Validation — 4-seed + Phase 3 + PPO Tuning)
 
 **Phase:** V3C follow-up validation — v2_aggressive 4-seed PPO_BCD validation, Phase 3 ensemble-disagreement audit, bounded PPO hyperparameter tuning, fair final comparison + addendum.

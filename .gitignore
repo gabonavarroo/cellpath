@@ -223,6 +223,14 @@ __marimo__/
 /data/*
 !/data/panels/
 !/data/panels/**
+# Replogle 2022 K562 Essential CRISPRi held-out gene-set artifacts (small, reproducibility evidence).
+# Raw Harmonizome .gz downloads under data/raw/replogle/ stay ignored (~5 MB).
+!/data/processed
+/data/processed/*
+!/data/processed/replogle
+/data/processed/replogle/*
+!/data/processed/replogle/*.json
+!/data/processed/replogle/*.csv
 /artifacts/
 /artifacts_64/
 /logs/
@@ -242,8 +250,11 @@ __marimo__/
 !/artifacts_v3/*.md
 /artifacts_v3/v3c/*
 !/artifacts_v3/v3c/interpretation
+!/artifacts_v3/v3c/interpretation/*.md
+!/artifacts_v3/v3c/interpretation/*.json
 !/artifacts_v3/v3c/figures
 !/artifacts_v3/v3c/final_champion_manifest.json
+!/artifacts_v3/v3c/replogle_heldout_action_overlap.csv
 !/artifacts_v3/v3c/utility_audit
 /artifacts_v3/v3c/utility_audit/*
 !/artifacts_v3/v3c/utility_audit/*.md

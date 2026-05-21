@@ -75,8 +75,14 @@ rl:  ## Train MaskablePPO RL agent (refuses unless dynamics gate passed).
 evaluate:  ## Run full evaluation suite (DepMap enrichment, latent metrics, trajectories).
 	$(PYTHON) scripts/evaluate.py --config-name $(CONFIG)
 
-pipeline:  ## End-to-end pipeline: data → vae → dynamics → rl → evaluate.
+pipeline:  ## V2 primary pipeline: data → vae → pairs → dynamics → rl → evaluate (default composition).
 	$(PYTHON) -m src.pipeline run --config-name $(CONFIG)
+
+pipeline-final:  ## FINAL MODEL pipeline (V3C champion): composes config/experiments/final.yaml.
+	$(PYTHON) -m src.pipeline run --config-name experiments/final
+
+eval-final:  ## Evaluate the V3C champion only (no retraining; reuses on-disk checkpoints).
+	$(PYTHON) -m src.pipeline run --config-name experiments/final --from evaluate
 
 # ---------------------------------------------------------------------------
 # RL evaluation utilities (need EXTRA= for paths / overrides).

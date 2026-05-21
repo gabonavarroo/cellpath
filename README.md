@@ -354,7 +354,7 @@ Never hardcode a path — add it to `config/paths.yaml` and reference the new ke
   planning is genuinely required. Track L (64-D legacy scVI reuse) and Track N (fresh
   64-D NB scVI) with the same RoR + correlation-loss dynamics. Greedy oracles still
   saturate at K ≥ 3 on both tracks.
-- Plan: [`V3A_LATENT_AUDIT_AND_64D_PLAN.md`](V3A_LATENT_AUDIT_AND_64D_PLAN.md).
+- Plan: [`V3A_LATENT_AUDIT_AND_64D_PLAN.md`](docs/plans/V3A_LATENT_AUDIT_AND_64D_PLAN.md).
   Final: [`artifacts_v3/interpretation/v3a_final.md`](artifacts_v3/interpretation/v3a_final.md).
 
 ### V3B — biorealistic reward stack
@@ -364,8 +364,8 @@ Never hardcode a path — add it to `config/paths.yaml` and reference the new ke
   trained and evaluated. Outcome on V2 primary dynamics: **`LOCKED_DESIGN_TECHNICAL_ONLY`**
   — the full stack implements and trains, but the +0.05 pp planning-advantage criterion
   is not met on V2 dynamics.
-- Plan: [`V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md`](V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md).
-- Lock: [`V3_CONTROLLER_OBJECTIVE_SPEC.md`](V3_CONTROLLER_OBJECTIVE_SPEC.md).
+- Plan: [`V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md`](docs/plans/V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md).
+- Lock: [`V3_CONTROLLER_OBJECTIVE_SPEC.md`](docs/plans/V3_CONTROLLER_OBJECTIVE_SPEC.md).
 - Interpretations: `artifacts_v3/interpretation/v3b_phase{01,2,2b,2c,3,3b,reward_stack_lock}.md`.
 
 ### V3C — dynamics-utility audit (in progress)
@@ -377,7 +377,7 @@ Never hardcode a path — add it to `config/paths.yaml` and reference the new ke
   survive 1 M training. Phase 2 (contraction-aware dynamics regulariser) specced and
   partially executed.
 - Status: single-seed / partial multi-seed only. Not a headline.
-- Plan: [`V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md`](V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md).
+- Plan: [`V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md`](docs/plans/V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md).
 - Latest: `artifacts_v3/v3c/interpretation/v3c_phase{0,0b,1,2_spec,2_summary,4_track_ln_escalation}.md`.
 
 ---
@@ -445,11 +445,12 @@ Companion docs: [`ARCHITECTURE.md`](ARCHITECTURE.md), [`CLAUDE.md`](CLAUDE.md),
 [`AGENTS.md`](AGENTS.md), [`PHASES.md`](PHASES.md), [`DATA.md`](DATA.md),
 [`EXPERIMENTS.md`](EXPERIMENTS.md), [`PROGRESS.md`](PROGRESS.md).
 
-Plans on disk: `PLAN-1.md`, `V2_*_PLAN.md`, `P0B_PRIME_PAIRING_CORRECTION_PLAN.md`,
-`P0C0_REACHABILITY_PLAN.md`, `V3_RESEARCH_PLAN.md`, `V3A_LATENT_AUDIT_AND_64D_PLAN.md`,
-`V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md`,
-`V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md`,
-`V3_CONTROLLER_OBJECTIVE_SPEC.md`.
+Historical plans and specs live under [`docs/plans/`](docs/plans/):
+`PLAN-1.md`, `P0B_PRIME_PAIRING_CORRECTION_PLAN.md`, `P0C0_REACHABILITY_PLAN.md`,
+`V2_RESEARCH_PLAN.md`, `V2_STRATEGY_P0E_PLAN.md`, `V2_STRATEGY_REASSESSMENT_PLAN.md`,
+`V2_WRAP_OR_V3_PIVOT_PLAN.md`, `V3_RESEARCH_PLAN.md`, `V3_CONTROLLER_OBJECTIVE_SPEC.md`,
+`V3A_LATENT_AUDIT_AND_64D_PLAN.md`, `V3B_BIOREALISTIC_CONTROL_OBJECTIVE_PLAN.md`,
+`V3C_DYNAMICS_UTILITY_AUDIT_AND_REFORMULATION_PLAN.md`.
 
 ---
 

@@ -249,3 +249,56 @@ __marimo__/
 !/artifacts_v3/v3c/utility_audit/*.md
 !/artifacts_v3/v3c/utility_audit/*.csv
 !/artifacts_v3/v3c/utility_audit/dynamics_inventory.csv
+# Phase 3 ensemble disagreement audit JSON (small, reproducibility evidence)
+!/artifacts_v3/v3c/utility_audit/ensemble_track_l
+/artifacts_v3/v3c/utility_audit/ensemble_track_l/*
+!/artifacts_v3/v3c/utility_audit/ensemble_track_l/*.json
+# Champion-essentials binary artifacts (kept small per Stage 4.5 close-out decision).
+# Allow only the files needed to reproduce `make final-v3c-eval`; skip diagnostic JSONs.
+!/artifacts_v3/v3c/dynamics_candidates
+/artifacts_v3/v3c/dynamics_candidates/*
+!/artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive
+/artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/*
+!/artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/model.pt
+!/artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/config.json
+!/artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/gate.json
+!/artifacts_v3/v3c/dynamics_candidates/contraction_aware_v2_aggressive/ridge_baseline.npz
+!/artifacts_v3/v3c/dynamics_ensemble
+/artifacts_v3/v3c/dynamics_ensemble/*
+!/artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0
+/artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0/*
+!/artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0/model.pt
+!/artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0/config.json
+!/artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0/gate.json
+!/artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0/ridge_baseline.npz
+!/artifacts_v3/v3c/rl_smokes
+/artifacts_v3/v3c/rl_smokes/*
+# Champion PPO (4-seed validation)
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k
+/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/*
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/ppo.zip
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/metadata.json
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed42_500k/action_freq.json
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed0_500k
+/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed0_500k/*
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed0_500k/ppo.zip
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed0_500k/metadata.json
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed1_500k
+/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed1_500k/*
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed1_500k/ppo.zip
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed1_500k/metadata.json
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed7_500k
+/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed7_500k/*
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed7_500k/ppo.zip
+!/artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed7_500k/metadata.json
+# Track L secondary champion PPO
+!/artifacts_v3/v3c/rl_smokes/track_l_n64_legacy_ror_corr010_seed42_1M
+/artifacts_v3/v3c/rl_smokes/track_l_n64_legacy_ror_corr010_seed42_1M/*
+!/artifacts_v3/v3c/rl_smokes/track_l_n64_legacy_ror_corr010_seed42_1M/ppo.zip
+!/artifacts_v3/v3c/rl_smokes/track_l_n64_legacy_ror_corr010_seed42_1M/metadata.json
+# Phase 4 4-seed aggregate (small CSV/JSON/MD)
+!/artifacts_v3/v3c/rl_final
+/artifacts_v3/v3c/rl_final/*
+!/artifacts_v3/v3c/rl_final/track_l_4seed_locked
+/artifacts_v3/v3c/rl_final/track_l_4seed_locked/*
+!/artifacts_v3/v3c/rl_final/track_l_4seed_locked/agg

@@ -1,0 +1,98 @@
+{
+  "n_members": 3,
+  "n_states": 300,
+  "n_genes": 105,
+  "n_latent": 64,
+  "members": [
+    {
+      "dir": "artifacts_v3/dynamics_n64_legacy_ror_corr010",
+      "val_pearson": 0.6198811531066895,
+      "ood_pearson": 0.5145321488380432
+    },
+    {
+      "dir": "artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed0",
+      "val_pearson": 0.6202291250228882,
+      "ood_pearson": 0.5138617157936096
+    },
+    {
+      "dir": "artifacts_v3/v3c/dynamics_ensemble/track_l_clone_seed1",
+      "val_pearson": 0.6198791861534119,
+      "ood_pearson": 0.5086837410926819
+    }
+  ],
+  "overall_disagreement_sigma": 0.04022766649723053,
+  "action_dependence_score_per_state_var_of_sigma": 5.080293340142816e-05,
+  "action_dependence_normalized": 0.031393454473846324,
+  "mean_action_sigma_range_per_state": 0.0375034399330616,
+  "sigma_per_gene_top10": [
+    [
+      0.06181491166353226,
+      81
+    ],
+    [
+      0.05514059588313103,
+      79
+    ],
+    [
+      0.05493026226758957,
+      38
+    ],
+    [
+      0.05475291609764099,
+      25
+    ],
+    [
+      0.053870297968387604,
+      85
+    ],
+    [
+      0.05304202064871788,
+      2
+    ],
+    [
+      0.052051037549972534,
+      0
+    ],
+    [
+      0.05008650943636894,
+      50
+    ],
+    [
+      0.050065796822309494,
+      27
+    ],
+    [
+      0.049714136868715286,
+      56
+    ]
+  ],
+  "ensemble_mean_alignment_median": 0.8359178304672241,
+  "ensemble_mean_top_gene_entropy_per_state": 1.8917589056046638,
+  "ensemble_mean_top_gene_entropy_normalized": 0.4064836748213021,
+  "top_gene_indices_distribution": {
+    "2": 4,
+    "5": 125,
+    "18": 36,
+    "26": 18,
+    "41": 1,
+    "54": 6,
+    "58": 2,
+    "59": 60,
+    "62": 2,
+    "63": 2,
+    "64": 10,
+    "68": 6,
+    "71": 2,
+    "86": 10,
+    "91": 1,
+    "97": 13,
+    "103": 2
+  },
+  "interpretation": {
+    "verdict_inputs": {
+      "prediction_preserved": true,
+      "action_dependent_disagreement": false,
+      "norm_top_gene_entropy_above_05": false
+    }
+  }
+}

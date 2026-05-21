@@ -1,0 +1,125 @@
+{
+  "passed": false,
+  "primary": {
+    "r2": 0.3822477543670927,
+    "pearson_r": 0.6137948036193848,
+    "baselines": {
+      "no_op": {
+        "r2": -2.89601061833622e-05,
+        "pearson_r": 0.0
+      },
+      "global_mean_delta": {
+        "r2": 0.009616720233444953,
+        "pearson_r": 0.0
+      },
+      "per_gene_mean_delta": {
+        "r2": 0.15200287750539787,
+        "pearson_r": 0.33311885595321655
+      },
+      "linear_ridge": {
+        "r2": 0.38679688000548107,
+        "pearson_r": 0.6155621409416199
+      },
+      "nearest_neighbor": {
+        "r2": 0.08532687797410443,
+        "pearson_r": 0.38196972012519836
+      }
+    },
+    "margin_checks": {
+      "margin_vs_noop_r2": {
+        "value": 0.38227671447327605,
+        "threshold": 0.1,
+        "pass": true
+      },
+      "margin_vs_global_mean_r2": {
+        "value": 0.37263103413364773,
+        "threshold": 0.05,
+        "pass": true
+      },
+      "margin_vs_per_gene_mean_r2": {
+        "value": 0.2302448768616948,
+        "threshold": 0.0,
+        "pass": true
+      },
+      "margin_vs_linear_ridge_pearson": {
+        "value": -0.0017673373222351074,
+        "threshold": 0.03,
+        "pass": false
+      },
+      "margin_vs_knn_r2": {
+        "value": 0.29692087639298825,
+        "threshold": 0.03,
+        "pass": true
+      }
+    }
+  },
+  "ood": {
+    "r2": 0.29472547899507084,
+    "pearson_r": 0.5111929178237915,
+    "baselines": {
+      "no_op": {
+        "r2": -2.370966777487382e-05,
+        "pearson_r": 0.0
+      },
+      "global_mean_delta": {
+        "r2": 6.238490089316429e-05,
+        "pearson_r": 0.0
+      },
+      "per_gene_mean_delta": {
+        "r2": 6.238490089316429e-05,
+        "pearson_r": 0.0
+      },
+      "linear_ridge": {
+        "r2": 0.18435741885891843,
+        "pearson_r": 0.46754440665245056
+      },
+      "nearest_neighbor": {
+        "r2": 0.03276608374879686,
+        "pearson_r": 0.35374701023101807
+      }
+    },
+    "margin_checks": {
+      "margin_vs_noop_r2": {
+        "value": 0.2947491886628457,
+        "threshold": 0.1,
+        "pass": true
+      },
+      "margin_vs_global_mean_r2": {
+        "value": 0.2946630940941777,
+        "threshold": 0.05,
+        "pass": true
+      },
+      "margin_vs_per_gene_mean_r2": {
+        "value": 0.2946630940941777,
+        "threshold": 0.0,
+        "pass": true
+      },
+      "margin_vs_linear_ridge_pearson": {
+        "value": 0.04364851117134094,
+        "threshold": 0.03,
+        "pass": true
+      },
+      "margin_vs_knn_r2": {
+        "value": 0.261959395246274,
+        "threshold": 0.03,
+        "pass": true
+      }
+    }
+  },
+  "uncertainty_calibration": {
+    "spearman": 0.8062594119902629,
+    "pass": true
+  },
+  "uncertainty_calibration_ood": {
+    "spearman": 0.7633285680431139,
+    "pass": true
+  },
+  "margins_used": {
+    "margin_vs_noop_r2": 0.1,
+    "margin_vs_global_mean_r2": 0.05,
+    "margin_vs_per_gene_mean_r2": 0.0,
+    "margin_vs_linear_ridge_pearson": 0.03,
+    "margin_vs_knn_r2": 0.03,
+    "min_uncertainty_calibration_spearman": 0.2
+  }
+}

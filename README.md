@@ -196,24 +196,12 @@ data/
 └── processed/{norman_hvg.h5ad, depmap_k562_chronos.parquet}
 ```
 
-**What is on this machine right now (audit 2026-05-20):**
-
-| Tier | Status |
-|---|---|
-| `artifacts/` (V1) | ✅ full (vae, pairs, dynamics, rl, rl_hard) |
-| `artifacts_64/` | ✅ frozen 64-D ablation |
-| `artifacts_v2/` | ⚠️ **docs + figures only** — the V2 primary dynamics and PPO checkpoints referenced by `config/paths.yaml` are not present locally. Regenerate with `make pipeline` (~30 min CUDA, ~2 h Apple MPS). |
-| `artifacts_v3/` | ⚠️ interpretation markdown only — no V3 model checkpoints on disk |
-| `data/processed/` | ✅ Norman HVG + DepMap K562 |
-
----
-
 ## How to run
 
 ### End-to-end (V2 primary, default)
 
 ```bash
-make pipeline                  # python -m src.pipeline run --config-name default
+make pipeline-final                  # python -m src.pipeline run --config-name default
 ```
 
 Steps: `data → vae → pairs → dynamics → rl → evaluate`. Each step is idempotent.

@@ -138,11 +138,11 @@ format:  ## Run ruff format.
 
 docker-build: docker-cpu docker-cuda  ## Build both Docker images.
 
-docker-cpu:  ## Build CPU image for CI / smoke.
-	$(DOCKER) build -f Dockerfile.cpu -t cellpath:cpu .
+docker-cpu:  ## Build CPU image for CI / smoke. (--platform linux/amd64 is required on Apple Silicon; harmless on Linux x86.)
+	$(DOCKER) build --platform linux/amd64 -f Dockerfile.cpu -t cellpath:cpu .
 
 docker-cuda:  ## Build CUDA image for cluster.
-	$(DOCKER) build -f Dockerfile.cuda -t cellpath:cuda .
+	$(DOCKER) build --platform linux/amd64 -f Dockerfile.cuda -t cellpath:cuda .
 
 # ---------------------------------------------------------------------------
 # Monitoring

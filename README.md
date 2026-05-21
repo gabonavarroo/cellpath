@@ -69,18 +69,27 @@ Full diagram and 7-concept walk-through: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 ## Quick start
 
 ```bash
-make setup           # uv venv (.venv) + install all dependencies
-make data            # download Norman 2019 + DepMap K562 Chronos
-make pipeline        # data → vae → pairs → dynamics → rl → evaluate
+make setup            # uv venv (.venv) + install all dependencies
+make data             # download Norman 2019 + DepMap K562 Chronos
+make pipeline-final   # FINAL MODEL — V3C champion (contraction_aware_v2_aggressive + PPO_BCD)
 ```
 
-Pipeline is idempotent — each step skips if its artifact already exists. Force-rerun a
-step with `--force <step>` or `make nuke` to start clean.
+Two pipelines coexist:
 
-Validate config without compute:
+| Target | What it composes | When to use |
+|---|---|---|
+| `make pipeline-final` | `config/experiments/final.yaml` → V3C **champion** (64-D scVI + contraction-aware dynamics + PPO_BCD seed 42 500k). The latest model on the repo. | Default for new runs — this is the final delivery. |
+| `make pipeline` | `config/default.yaml` → V2 primary (`RoR_corr010 × C2 PPO`, 32-D scVI). Multi-seed validated headline. | Reproduce the V2 publishable result with 4-seed CIs. |
+| `make eval-final` | `experiments/final` from the `evaluate` step only — no retraining. | Re-run only eval + figures of the V3C champion using on-disk checkpoints. |
+
+Both pipelines are idempotent — each step skips if its target artifact already exists.
+Force-rerun a step with `--force <step>` or `make nuke` to start from scratch.
+
+Validate any config without compute:
 
 ```bash
-PYTHONPATH=. python -m src.pipeline run --config-name default --dry-run
+PYTHONPATH=. python -m src.pipeline run --config-name experiments/final --dry-run
+PYTHONPATH=. python -m src.pipeline run --config-name default          --dry-run
 ```
 
 ---
@@ -210,19 +219,25 @@ make pipeline                  # python -m src.pipeline run --config-name defaul
 Steps: `data → vae → pairs → dynamics → rl → evaluate`. Each step is idempotent.
 
 ```bash
+# V3C champion (final model)
+python -m src.pipeline run --config-name experiments/final --force vae
+python -m src.pipeline run --config-name experiments/final --skip evaluate
+python -m src.pipeline run --config-name experiments/final --from rl
+
+# V2 primary (multi-seed publishable headline)
 python -m src.pipeline run --config-name default --force vae
-python -m src.pipeline run --config-name default --skip evaluate
-python -m src.pipeline run --config-name default --from rl
 ```
 
 ### Step-by-step
 
 ```bash
-make vae         # python scripts/train_vae.py --config-name default
-make pairs       # python scripts/build_pairs.py --config-name default
-make dynamics    # python scripts/train_dynamics.py --config-name default
-make rl          # python scripts/train_rl.py --config-name default  (refuses unless gate passes or rl.train.skip_gate=true)
-make evaluate    # python scripts/evaluate.py + visualize.py
+# Per-component targets honor CONFIG=<name>. Default is the V2 composition.
+# For the final V3C champion, set CONFIG=experiments/final.
+make vae         CONFIG=experiments/final   # python scripts/train_vae.py
+make pairs       CONFIG=experiments/final
+make dynamics    CONFIG=experiments/final
+make rl          CONFIG=experiments/final   # refuses unless rl.train.skip_gate=true; experiments/final sets it.
+make evaluate    CONFIG=experiments/final
 ```
 
 ### Reproduce V1 (not V2) from defaults
@@ -269,34 +284,47 @@ python scripts/train_vae.py --config-name vae_ablation         # composes experi
 
 ```bash
 make docker-cuda                                    # build cellpath:cuda
-make docker-cpu                                     # build cellpath:cpu
+make docker-cpu                                     # build cellpath:cpu  (forces --platform linux/amd64 on Apple Silicon)
 
 docker compose --profile cuda up training           # full pipeline on GPU
 docker compose --profile cpu  up smoke              # dry-run validation
 docker compose up tensorboard                       # http://localhost:6006
 ```
 
-### Statically verified
+On Apple Silicon you must pass `--platform linux/amd64` because the `torch==2.4.1+cpu`
+wheel only ships for `linux_x86_64`. The Makefile target does this for you; if you call
+`docker build` directly, use:
 
-- Both Dockerfiles install `pyproject.toml` deps via `uv pip install --system`; set
-  `PYTHONPATH=/workspace`.
-- Torch wheels (2.4.1 cu121 / 2.4.1+cpu) satisfy `pyproject.toml`'s `torch>=2.2,<2.5`.
-- `.dockerignore` excludes binary artifacts (`*.pt`, `*.h5ad`, `*.npz`) and raw data.
-- CPU `CMD` (`python -m src.pipeline run --dry-run`) works on the host.
+```bash
+docker build --platform linux/amd64 -f Dockerfile.cpu -t cellpath:cpu .
+```
 
-### Caveats to verify on a real run
+### Verified
 
-- Docker daemon was offline at audit time; I could not `docker build`. Treat the above
-  as a static review.
-- The `training` service mixes a bind mount (`.:/workspace`) with named volumes
-  (`cellpath-data:/workspace/data`, `cellpath-artifacts:/workspace/artifacts`). On some
-  Docker versions the bind mount shadows the named volumes on those subpaths. Pick one
-  strategy or verify with:
+Verified end-to-end on this machine (2026-05-21):
+- ✓ `docker build --platform linux/amd64 -f Dockerfile.cpu -t cellpath:cpu .`  → 1.37 GB image.
+- ✓ `docker run --rm --platform linux/amd64 cellpath:cpu python -m src.pipeline run --config-name experiments/final --dry-run`  → composes V3C champion cleanly.
+- ✓ `docker run --rm --platform linux/amd64 cellpath:cpu python -m src.pipeline run --config-name default --dry-run`  → composes V2 primary cleanly.
+- ✓ `docker run --rm --platform linux/amd64 cellpath:cpu pytest --version`  → `pytest 9.0.3` (test runner available).
+
+### Caveats not verified on this machine
+
+- The CUDA image (`Dockerfile.cuda`) requires NVIDIA hardware; this is an Apple Silicon
+  laptop, so `cellpath:cuda` build + `docker compose --profile cuda up training` were
+  not executed locally. Static review of the Dockerfile is unchanged from prior audit.
+- The `training` service in `docker-compose.yml` mixes a bind mount (`.:/workspace`) with
+  named volumes (`cellpath-data:/workspace/data`, `cellpath-artifacts:/workspace/artifacts`).
+  On some Docker versions the bind mount shadows the named volumes on those subpaths.
+  Pick one strategy or verify on first cluster run with:
   ```bash
   docker compose --profile cuda exec training mount | grep workspace
   ```
-- `runtime: nvidia` is the legacy spelling; still works with `nvidia-container-toolkit`
-  but emits a warning.
+- `runtime: nvidia` in `docker-compose.yml` is the legacy spelling; still works with
+  `nvidia-container-toolkit` but emits a warning.
+- If you mount the host repo as a volume (`-v $(pwd):/workspace`) the local `.venv/`
+  (built natively for the host OS) can collide with the container's Python. Either
+  (a) skip the volume mount (the container has everything baked in), or (b) bind-mount
+  only specific subdirs, e.g. `-v $(pwd)/artifacts:/workspace/artifacts`.
 
 ---
 

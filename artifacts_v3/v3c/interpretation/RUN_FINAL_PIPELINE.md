@@ -161,6 +161,37 @@ Wall time: ~3–5 min training + ~5–10 min evaluation per cell at n_eps=200.
 | Presentation figures | `artifacts_v3/v3c/figures/*.png` |
 | Interpretation docs | `artifacts_v3/v3c/interpretation/*.md` |
 
+## 9b. Replogle 2022 K562 essential CRISPRi held-out audit (Bucket-C)
+
+Bucket-C post-hoc action-overlap audit. No retraining; reads existing eval `summary.json`
+files. Total wall time: ~10 s for both stages.
+
+```bash
+# Stage 2 — download Harmonizome gene-set artifacts and rebuild processed JSON/CSV
+python scripts/download_replogle_heldout.py            # ~5 MB raw .gz to data/raw/replogle/
+python scripts/download_replogle_heldout.py --skip-download  # reuse cached raw files
+
+# Stage 4 — action-overlap audit for the V3C champion
+python scripts/audit_v3c_replogle_heldout.py
+python scripts/audit_v3c_replogle_heldout.py --primary-cell-only
+```
+
+Reads:
+- `data/processed/replogle/replogle_norman_intersection.json` (Stage 2 output)
+- `artifacts_v3/v3c/rl_smokes/contraction_aware_v2_aggressive_seed{42,0,1,7}_500k/eval/<cell>/<policy>/summary.json`
+- `artifacts_v3/v3c/rl_final/track_l_4seed_locked/eval/seed{42,0,1,7}/<cell>/<policy>/summary.json`
+- `artifacts_v3/v3c/rl_smokes/anchor_v2_ror_corr010_1M_reused/eval/<cell>/<policy>/summary.json`
+
+Writes:
+- `data/processed/replogle/{replogle_essential_genes.json, replogle_essential_genes.csv,
+  replogle_norman_intersection.json, replogle_only_essential_genes.json, source_metadata.json}`
+- `artifacts_v3/v3c/replogle_heldout_action_overlap.csv` (277-row long table)
+- `artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit_metrics.json`
+- `artifacts_v3/v3c/figures/replogle_heldout_action_overlap.png` (generated separately
+  via the snippet at the end of `v3c_final_replogle_heldout_audit.md` §10)
+
+Full report: `artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit.md`.
+
 ## 10. Sacred-rule check
 
 After any session:

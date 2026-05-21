@@ -131,7 +131,7 @@
       "K=3/b6-8/OOD: PPO LOSES to greedy_dyn_3 (0.800 vs 0.935 — −0.135). Same pattern as K=2/b6-8 (PPO 0.185 vs greedy_dyn_1 0.440 — −0.255). At the easier (lower-distance) bins PPO under-performs greedy.",
       "K=4/b8-10/OOD: PPO=1.000 ties best greedy (g_1 = g_2 = 1.000); only beats greedy_dyn_3 (0.840) by +0.160 — but g_dyn_3 is the WORST greedy depth here (deeper greedy is hurt by the field's non-monotonic depth response).",
       "Bucket-A wins (tox=0, CE=0) are reward-prior optimization on Chronos labels that also appear in the reward; NOT independent biological validation.",
-      "Bucket-C (Replogle K562 essential CRISPRi) is pending_no_local_source for this evaluation.",
+      "Bucket-C (Replogle K562 essential CRISPRi held-out audit): verdict V3C_REPLOGLE_HELDOUT_AUDIT_INCONCLUSIVE_CHAMPION_USES_FOXL2. 4-seed PPO_BCD frac_Replogle-only at primary cell = 0.0133 [CI95 -0.013, +0.040] (straddles zero and random); seed-42 outlier at 0.0533 (×1.40 random, all 32 selections are FOXL2). DepMap-essential frac = 0 across every PPO_BCD eval (safety prior structurally satisfied). See artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit.md.",
       "Not therapeutic-reprogramming. Target = unperturbed-K562 NT centroid (in-silico latent-space steering).",
       "v2_aggressive's dynamics gate FAILS (ridge_margin −0.0018) but val Pearson 0.6138 is preserved (vs Track L 0.620); the gate failure reflects the regularizer's intended tradeoff — slightly worse prediction in exchange for less universally-attractive geometry.",
       "Single-seed CANDIDATE_TUNED claim; do NOT claim LOCKED_DESIGN_POSITIVE_SIGNAL without 4-seed CI excluding zero."
@@ -223,6 +223,11 @@
     "v3c_phase4_escalation": "artifacts_v3/v3c/interpretation/v3c_phase4_track_ln_escalation.md",
     "v3c_phase2_v1": "artifacts_v3/v3c/interpretation/v3c_phase2_contraction_aware_summary.md",
     "v3c_phase2_5": "artifacts_v3/v3c/interpretation/v3c_phase2_5_contraction_aware_summary.md",
-    "v3c_final_addendum": "artifacts_v3/v3c/interpretation/v3c_final_addendum_phase3_ppo_tuning.md"
+    "v3c_final_addendum": "artifacts_v3/v3c/interpretation/v3c_final_addendum_phase3_ppo_tuning.md",
+    "v3c_replogle_heldout_audit": "artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit.md",
+    "v3c_replogle_availability_check": "artifacts_v3/v3c/interpretation/v3c_replogle_availability_check.md",
+    "v3c_replogle_single_cell_feasibility": "artifacts_v3/v3c/interpretation/v3c_replogle_single_cell_feasibility.md",
+    "v3c_replogle_heldout_metrics_json": "artifacts_v3/v3c/interpretation/v3c_final_replogle_heldout_audit_metrics.json",
+    "v3c_replogle_heldout_csv": "artifacts_v3/v3c/replogle_heldout_action_overlap.csv"
   }
 }

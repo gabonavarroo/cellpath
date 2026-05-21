@@ -120,6 +120,48 @@ See `final_champion_selection.md` for the full interpretive rationale.
 
 **What this is NOT**: not therapeutic-reprogramming (target = unperturbed-K562 NT centroid, in-silico steering); not biological discovery (Bucket-A wins use Chronos labels that also appear in the reward); not multi-seed-stable positive signal.
 
+## 10a. Bucket-C held-out audit (Replogle 2022 K562 essential CRISPRi)
+
+A post-hoc held-out **action-overlap** audit was added in a follow-up session
+(2026-05-21) using the same Harmonizome-mirrored Replogle 2022 K562 essential
+Perturb-seq panel that V3B Phase 2c parsed. Gene-set construction reproduces
+Phase 2c exactly: Replogle ∩ Norman 105 = 6 (FOXL2, KIF18B, NCL, PLK4, SET, STIL);
+Replogle-only ∩ Norman 105 = 4 (FOXL2, KIF18B, NCL, SET).
+
+**Champion vs same-field greedy at K=3/bin8-10/OOD (the discriminating cell):**
+
+| Policy | success | frac actions on Replogle-only essential | enrichment × random |
+|---|---:|---:|---:|
+| PPO_BCD seed 42 (champion) | 0.840 | **0.0533** (all FOXL2) | **×1.40** |
+| greedy_dyn_3_fused | 0.765 | 0.0383 (all FOXL2) | ×1.01 |
+| random_uniform_valid | 0.020 | 0.0288 (mixed) | ×0.76 |
+| PPO_BCD seeds {0, 1, 7} | {0.705, 0.840, 0.840} | 0.0000 each | ×0.00 |
+
+**Key finding.** The seed-42 +0.075 advantage is mediated by aggressive FOXL2 selection
+(32 actions / 600 = 5.33 %; FOXL2 is a Replogle-essential gene NOT in the DepMap reward).
+Three of four seeds (1, 7 reproduce 0.840; 0 reaches 0.705) hit equivalent success
+*without* selecting any Replogle-only essential, so the +0.075 mechanism is not
+load-bearing for the policy class — but it IS load-bearing for the seed-42 checkpoint
+we ship as the champion.
+
+**4-seed mean frac_Replogle-only at primary cell:** 0.0133 [CI95 −0.013, +0.040],
+straddles zero and straddles the random baseline 0.0381 → **inconclusive**.
+
+**DepMap-essential selection:** 0 % across every PPO_BCD evaluation on this field —
+the locked safety prior IS structurally satisfied within the reward.
+
+**Verdict for V3C champion:** `V3C_REPLOGLE_HELDOUT_AUDIT_INCONCLUSIVE_CHAMPION_USES_FOXL2`.
+The Phase 2c verdict `HELDOUT_INCONCLUSIVE_NO_GENERALIZATION_DETECTED` is **preserved
+and sharpened**: not "consistent with safer action selection under an external
+essentiality source", but specifically *uses* a held-out essential in the favourable
+seed direction. Track L 4-seed (the LOCKED_DEFAULT secondary reference) is cleaner —
+0 Replogle-only selections across all 4 seeds at its primary cell.
+
+Full audit: `v3c_final_replogle_heldout_audit.md`. Reproduction commands:
+`python scripts/download_replogle_heldout.py` + `python scripts/audit_v3c_replogle_heldout.py`.
+Single-cell feasibility analysis (state-side probe deferred to future CRISPRi
+action-space extension): `v3c_replogle_single_cell_feasibility.md`.
+
 ## 10b. Follow-up validation (v2_aggressive 4-seed + PPO tuning)
 
 A follow-up session ran:
@@ -133,7 +175,12 @@ A follow-up session ran:
 - **Action-dependent uncertainty** — single-head heteroscedastic σ is state-dependent but not action-discriminating (V3B Phase 4 finding #2). An ensemble of 3–5 compatible dynamics models with different seeds would produce ensemble-disagreement uncertainty that Variant D could actually exploit.
 - **Representation reformulation** — SCANVI 32D (semi-supervised) or ZINB 64D (count likelihood) may produce a less universally-attractive latent geometry. Out of scope for V3C due to compute / time.
 - **PPO early stopping** — Track N showed 500k → 1M non-monotonicity (single-seed +0.075 collapsed to −0.05). Checkpointing every 100k and selecting the best on a held-out cell would be a robust low-cost addition.
-- **Held-out biology validation** — Bucket C is currently `pending_no_local_source` for some assays. Adding Replogle 2022 K562 essential CRISPRi (already parsed via Harmonizome) and OGEE v3 essentiality flags as independent biological priors would let us evaluate "B+C+D" against a non-overlapping ground truth.
+- **Held-out biology validation** — Bucket C action-overlap is now `available_inconclusive`
+  for both the V3C champion (see §10a) and Phase 2c safety-aware PPO_C. Adding OGEE v3
+  essentiality flags as an additional independent biological prior would further constrain
+  the held-out audit. A CRISPRi action-axis (per `DATA.md` §7 future-work entry) would unlock
+  *state-side* held-out validation, which is currently blocked by the CRISPRa-vs-CRISPRi
+  modality mismatch (see `v3c_replogle_single_cell_feasibility.md`).
 
 ## Links
 
